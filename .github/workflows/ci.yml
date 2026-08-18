@@ -105,6 +105,10 @@ jobs:
 
   image:
     name: Container image
+    # Single architecture here on purpose: CI is proving the image works, and
+    # the release workflow is what proves it builds for both. Emulating the
+    # other architecture would multiply the build time to re-check something
+    # the Dockerfile does not vary on.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
