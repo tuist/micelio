@@ -39,6 +39,13 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "micelio.serviceAccountName" . }}
+      # Kubernetes injects a Docker-link-style variable for every Service in
+      # the namespace: a Service named `micelio-admin` becomes
+      # MICELIO_ADMIN_PORT=tcp://10.0.0.1:4002, which collides exactly with the
+      # variable Micelio reads for its admin port — and the injected value
+      # wins over the image's own ENV, so the node dies at boot parsing a URL
+      # as an integer. Nothing here uses those variables.
+      enableServiceLinks: false
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -103,20 +110,34 @@ spec:
             - name: MICELIO_S3_PATH_STYLE
               value: {{ .Values.objectStore.pathStyle | quote }}
 
+            # Set explicitly as well as disabling service links, so a
+            # cluster that injects them anyway cannot decide our ports.
+            - name: MICELIO_GIT_PORT
+              value: "4000"
+            - name: MICELIO_HOOK_PORT
+              value: "4001"
+            - name: MICELIO_ADMIN_PORT
+              value: "4002"
+
             - name: MICELIO_DATA_DIR
               value: /var/lib/micelio/repositories
+            # int64 on every numeric value below is load-bearing: Helm parses
+            # unquoted YAML numbers as float64, so 268435456 renders as
+            # "2.68435456e+08" and the node dies at boot parsing it. It only
+            # shows up for values large enough to reach exponent notation,
+            # which is why the small ones look like they work.
             - name: MICELIO_DEFAULT_REPLICAS
-              value: {{ .Values.config.defaultReplicas | quote }}
+              value: {{ .Values.config.defaultReplicas | int64 | quote }}
             - name: MICELIO_STALENESS_BUDGET_MS
-              value: {{ .Values.config.stalenessBudgetMs | quote }}
+              value: {{ .Values.config.stalenessBudgetMs | int64 | quote }}
             - name: MICELIO_POLICY_STALENESS_BUDGET_MS
-              value: {{ .Values.config.policyStalenessBudgetMs | quote }}
+              value: {{ .Values.config.policyStalenessBudgetMs | int64 | quote }}
             - name: MICELIO_COMPACTION_ENTRY_THRESHOLD
-              value: {{ .Values.config.compactionEntryThreshold | quote }}
+              value: {{ .Values.config.compactionEntryThreshold | int64 | quote }}
             - name: MICELIO_COMPACTION_BYTES_THRESHOLD
-              value: {{ .Values.config.compactionBytesThreshold | quote }}
+              value: {{ .Values.config.compactionBytesThreshold | int64 | quote }}
             - name: MICELIO_IDLE_EVICTION_MS
-              value: {{ .Values.config.idleEvictionMs | quote }}
+              value: {{ .Values.config.idleEvictionMs | int64 | quote }}
             {{- with .Values.config.publicUrl }}
             - name: MICELIO_PUBLIC_URL
               value: {{ . | quote }}

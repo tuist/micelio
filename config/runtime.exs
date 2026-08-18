@@ -11,6 +11,28 @@ import Config
 if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
   get = fn key, default -> System.get_env(key, default) end
 
+  # Kubernetes injects `<SERVICE>_PORT=tcp://host:port` for every Service in the
+  # namespace, which collides with variables like MICELIO_ADMIN_PORT. The chart
+  # disables that, but a hand-written manifest may not, and the failure is
+  # otherwise a crash dump from binary_to_integer with no hint of the cause.
+  port = fn key, default ->
+    value = System.get_env(key, default)
+
+    case Integer.parse(value) do
+      {port, ""} ->
+        port
+
+      _ ->
+        raise """
+        #{key} is #{inspect(value)}, which is not a port number.
+
+        If that looks like a URL, Kubernetes injected it: a Service whose name
+        matches this variable produces `tcp://host:port`. Set
+        `enableServiceLinks: false` on the pod, or set #{key} explicitly.
+        """
+    end
+  end
+
   require_env = fn key ->
     System.get_env(key) ||
       raise """
@@ -56,10 +78,10 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
     data_dir: get.("MICELIO_DATA_DIR", "/var/lib/code/repositories"),
     object_store: object_store,
     auth: auth,
-    git_port: String.to_integer(get.("MICELIO_GIT_PORT", "4000")),
-    hook_port: String.to_integer(get.("MICELIO_HOOK_PORT", "4001")),
-    admin_port: String.to_integer(get.("MICELIO_ADMIN_PORT", "4002")),
-    gossip_port: String.to_integer(get.("MICELIO_GOSSIP_PORT", "4010")),
+    git_port: port.("MICELIO_GIT_PORT", "4000"),
+    hook_port: port.("MICELIO_HOOK_PORT", "4001"),
+    admin_port: port.("MICELIO_ADMIN_PORT", "4002"),
+    gossip_port: port.("MICELIO_GOSSIP_PORT", "4010"),
     admin_token: require_env.("MICELIO_ADMIN_TOKEN"),
     peers: get.("MICELIO_PEERS", "") |> String.split(",", trim: true),
     default_replicas: String.to_integer(get.("MICELIO_DEFAULT_REPLICAS", "3")),
