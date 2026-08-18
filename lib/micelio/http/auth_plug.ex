@@ -66,10 +66,14 @@ defmodule Micelio.HTTP.AuthPlug do
             {:ok, conn}
 
           {:error, :forbidden} ->
-            if Micelio.Auth.Principal.allows?(principal, repo_id, :read) do
-              {:halt, deny(conn, 403, "micelio: not permitted to #{permission} #{repo_id}")}
-            else
-              {:halt, deny(conn, 404, "micelio: repository not found")}
+            # A caller who can already see the repository learns nothing from
+            # being told it exists, so they get an honest 403. Everyone else
+            # gets 404 — including callers authorised by policy rather than by
+            # their token, which is why this asks `Auth` rather than inspecting
+            # the principal's own grants.
+            case Auth.authorize(principal, repo_id, :read) do
+              :ok -> {:halt, deny(conn, 403, "micelio: not permitted to #{permission} #{repo_id}")}
+              {:error, :forbidden} -> {:halt, deny(conn, 404, "micelio: repository not found")}
             end
         end
     end

@@ -24,7 +24,12 @@ defmodule Micelio.Auth.Webhook do
   @spec start_link(keyword()) :: {:ok, pid()}
   def start_link(_opts) do
     Task.start_link(fn ->
-      :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+      # Idempotent, so a supervisor restart re-attaches to the existing cache
+      # rather than crashing on a name that is already taken.
+      if :ets.whereis(@table) == :undefined do
+        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+      end
+
       Process.sleep(:infinity)
     end)
   end

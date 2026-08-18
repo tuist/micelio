@@ -40,6 +40,20 @@ defmodule Micelio.Policy do
   read — where serving stale data would be a correctness failure — a
   five-second-old policy is a bounded, deliberate window, and it is still
   orders of magnitude tighter than the token lifetime it replaces.
+
+  ## Behaviour when object storage is unreachable
+
+  Two different answers, on purpose:
+
+    * A policy that has been read before keeps being served from cache.
+      Revoking everyone's access because the store hiccupped would turn a
+      storage blip into an outage.
+    * A policy that has never been read grants nothing. Failing open for an
+      unknown policy would mean an unreachable store silently widened access,
+      which is the one direction that must never happen.
+
+  Credentials that carry their own grants are unaffected either way, which is
+  part of why machine identities should use them.
   """
 
   require Logger
