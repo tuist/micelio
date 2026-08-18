@@ -9,10 +9,11 @@ defmodule Micelio.PromEx.Plugin do
   that is a metadata-only round trip against object storage. If `modified`
   starts dominating, replicas are doing catch-up work on the read path.
 
-  **Is there write contention?** `micelio_wal_cas_retries_total` counts pushes
-  that lost a compare-and-swap and had to rebuild against a newer state. A few
-  are normal on a busy repository; many mean the repository is a write hotspot
-  whose throughput is bounded by object store latency.
+  **Is there write contention?** Read `micelio_wal_append_batch_size` first: it
+  is how many pushes each compare-and-swap absorbed, so rising with load is
+  group commit doing its job. `micelio_wal_cas_retry_count` is the contention
+  that got past it — a few are normal, but many mean pushes are arriving at
+  several nodes at once and the preferred-writer routing is not taking effect.
 
   **How far behind is this node?** `micelio_replica_entries_behind` on each
   sync. Persistent non-zero values mean hints are not arriving, or object
@@ -65,6 +66,15 @@ defmodule Micelio.PromEx.Plugin do
         measurement: :attempts,
         description: "Compare-and-swap attempts needed to commit an entry.",
         reporter_options: [buckets: [1, 2, 3, 5, 8, 12]]
+      ),
+      distribution(
+        [:micelio, :wal, :append_batch, :size],
+        event_name: [:micelio, :wal, :append_batch],
+        measurement: :size,
+        description:
+          "Entries committed per compare-and-swap. This is group commit working: " <>
+            "rising with load is the system absorbing contention rather than retrying through it.",
+        reporter_options: [buckets: [1, 2, 4, 8, 16, 32, 64]]
       ),
       counter(
         [:micelio, :wal, :cas_retry, :count],

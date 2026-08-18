@@ -13,7 +13,11 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Deliberately not cancel-in-progress. A release run pushes an image, pushes
+  # a chart, then creates the release; cancelling it partway leaves published
+  # artefacts with no release describing them. Queueing behind the previous run
+  # is slower and always coherent.
+  cancel-in-progress: false
 
 env:
   MISE_VERSION: "2026.4.18"

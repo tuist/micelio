@@ -107,7 +107,7 @@ replicas are doing real catch-up work on the read path, and latency will follow.
 | Metric | Question it answers |
 |---|---|
 | `micelio_wal_cas_retry_count` | Is there write contention the writer could not absorb? A few are normal; many mean pushes are arriving at several nodes at once, so routing to the preferred writer is not taking effect |
-| `micelio_wal_append_batch_size` | How well group commit is working. Rising with load is the system doing its job |
+| `micelio_wal_append_batch_size` | Pushes absorbed per compare-and-swap. Rising with load is group commit doing its job |
 | `micelio_replica_sync_entries_behind` | How far behind is this node? Persistent non-zero means hints are not arriving, or the store is slow |
 | `micelio_git_requests_in_flight` | Should we scale? See below |
 | `micelio_push_rejected_count{reason}` | `non_fast_forward` is users; `storage` and `contention` are yours |
