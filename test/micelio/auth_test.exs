@@ -102,6 +102,31 @@ defmodule Micelio.AuthTest do
       assert Principal.allows?(principal, "acme/app", :write)
     end
 
+    test "a token scoped to an account cannot touch another one" do
+      # Regression: the expansion used to add a `**` grant alongside the scoped
+      # one, which subsumed it and made every account token a superuser token.
+      assert {:ok, principal} = Static.authenticate({:bearer, "good"}, tokens: @tokens)
+
+      refute Principal.allows?(principal, "someone-else/private", :read)
+      refute Principal.allows?(principal, "someone-else/private", :write)
+      refute Principal.allows?(principal, "acmeter/lookalike", :read)
+    end
+
+    test "a token with no account is unscoped, which has to be chosen deliberately" do
+      tokens = %{"root" => %{scopes: [:admin]}}
+
+      assert {:ok, principal} = Static.authenticate({:bearer, "root"}, tokens: tokens)
+      assert Principal.allows?(principal, "anything/at/all", :admin)
+    end
+
+    test "explicit grants are used verbatim" do
+      tokens = %{"t" => %{account: "acme", grants: [Principal.grant("acme/one", [:read])]}}
+
+      assert {:ok, principal} = Static.authenticate({:bearer, "t"}, tokens: tokens)
+      assert Principal.allows?(principal, "acme/one", :read)
+      refute Principal.allows?(principal, "acme/two", :read)
+    end
+
     test "rejects an unknown token" do
       assert {:error, :invalid_credential} =
                Static.authenticate({:bearer, "bad"}, tokens: @tokens)

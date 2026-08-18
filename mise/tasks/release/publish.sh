@@ -27,8 +27,16 @@ if [[ -n "${dist}" && -d "${dist}" ]]; then
   while IFS= read -r line; do artifacts+=("$line"); done < <(find "${dist}" -type f -print)
 fi
 
-gh release create "${version}" \
+if ! gh release create "${version}" \
   --title "${version}" \
   --notes-file "${notes}" \
   --target "${target}" \
-  "${artifacts[@]}"
+  "${artifacts[@]}"; then
+  echo "----" >&2
+  echo "Creating the release failed. The token's permissions were:" >&2
+  gh api rate_limit --include 2>&1 | grep -i "x-oauth-scopes\|x-accepted" >&2 || true
+  echo "If this is 'Resource not accessible by integration', the workflow token" >&2
+  echo "lacks contents:write for this repository — check the organisation's" >&2
+  echo "Actions permissions rather than this workflow." >&2
+  exit 1
+fi

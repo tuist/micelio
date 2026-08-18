@@ -5,11 +5,11 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  packages: write
-  id-token: write
-  attestations: write
+# Declared per job rather than once at the top. Least privilege is the reason,
+# but it also keeps the release-creating job's token to exactly the scope that
+# operation needs, which is the configuration known to work elsewhere in this
+# organisation.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,6 +29,8 @@ jobs:
   detect:
     name: Check for releasable changes
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       should-release: ${{ steps.detect.outputs.should-release }}
       latest-version: ${{ steps.detect.outputs.latest-version }}
@@ -50,6 +52,11 @@ jobs:
     needs: detect
     if: needs.detect.outputs.should-release == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -98,6 +105,9 @@ jobs:
     needs: [detect, image]
     if: needs.detect.outputs.should-release == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -119,6 +129,9 @@ jobs:
     needs: [detect, image, chart]
     if: needs.detect.outputs.should-release == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      # Creating a release creates a tag, which is a write to contents.
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:

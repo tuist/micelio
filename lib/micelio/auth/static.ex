@@ -50,14 +50,20 @@ defmodule Micelio.Auth.Static do
     }
   end
 
-  # A token configured with only an account and a scope list is the common
-  # shape; expand it to a grant over that account's namespace.
+  # A token configured with an account and a scope list is the common shape;
+  # it expands to a grant over that account's namespace and nothing else.
+  #
+  # Emphatically *not* also a `**` grant. Adding one alongside the scoped grant
+  # makes the scoping decorative — the broad pattern subsumes it — so a token
+  # meant for one tenant would authorise writes to every other. A token with no
+  # account is the only unscoped case, and that is an explicit choice made in
+  # configuration rather than an accident of expansion.
   defp default_grants(attrs) do
     permissions = Map.get(attrs, :scopes, [:read])
 
     case Map.get(attrs, :account) do
       nil -> [Principal.grant("**", permissions)]
-      account -> [Principal.grant("**", permissions), Principal.grant("#{account}/**", permissions)]
+      account -> [Principal.grant("#{account}/**", permissions)]
     end
   end
 

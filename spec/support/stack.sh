@@ -33,6 +33,9 @@ export GIT_TERMINAL_PROMPT=0
 
 export E2E_TOKEN="e2e-token"
 export E2E_ADMIN_TOKEN="e2e-admin-token"
+# A second identity with no grant on the acme namespace at all, used to prove
+# that authorization policy — not the token — is what lets it in.
+export E2E_OUTSIDER_TOKEN="e2e-outsider-token"
 
 export NODE1_GIT=4100 NODE1_HOOK=4101 NODE1_ADMIN=4102
 export NODE2_GIT=4200 NODE2_HOOK=4201 NODE2_ADMIN=4202
@@ -153,7 +156,8 @@ stack::node_up() {
     MICELIO_ADMIN_PORT="${admin_port}" \
     MICELIO_ADMIN_TOKEN="${E2E_ADMIN_TOKEN}" \
     MICELIO_AUTH_BACKEND="static" \
-    MICELIO_AUTH_TOKENS="${E2E_TOKEN}=acme:read,write" \
+    MICELIO_AUTH_TOKENS="${E2E_TOKEN}=acme:read,write;${E2E_OUTSIDER_TOKEN}=outsider:read" \
+    MICELIO_POLICY_STALENESS_BUDGET_MS="500" \
     MICELIO_DEFAULT_REPLICAS="2" \
     MICELIO_CLUSTER_STRATEGY="epmd" \
     MICELIO_PEERS="micelio-e2e-1@127.0.0.1,micelio-e2e-2@127.0.0.1" \
