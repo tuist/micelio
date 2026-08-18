@@ -23,6 +23,7 @@ defmodule Micelio.Application do
     Micelio.Telemetry.attach()
     Micelio.Telemetry.setup_opentelemetry()
     log_boot()
+    check_ports()
 
     children =
       [
@@ -56,6 +57,41 @@ defmodule Micelio.Application do
 
       error ->
         error
+    end
+  end
+
+  # A port collision otherwise surfaces as `:eaddrinuse` attributed to an
+  # internal child process, which says nothing about which port or what to do
+  # about it. Checking first costs three socket opens and turns a puzzle into
+  # an instruction.
+  defp check_ports do
+    if Config.start_listeners?() do
+      [
+        {"git and MCP", Config.git_port(), "MICELIO_GIT_PORT", []},
+        # The hook listener binds loopback only, so the probe has to as well:
+        # a port can be free on one interface and taken on another.
+        {"receive-pack hook", Config.hook_port(), "MICELIO_HOOK_PORT", [ip: {127, 0, 0, 1}]},
+        {"admin and metrics", Config.admin_port(), "MICELIO_ADMIN_PORT", []}
+      ]
+      |> Enum.each(fn {purpose, port, variable, options} ->
+        # Deliberately without `reuseaddr`: it would let this bind succeed
+        # alongside the very listener we are trying to detect, which is the
+        # opposite of the point.
+        case :gen_tcp.listen(port, [:binary | options]) do
+          {:ok, socket} ->
+            :gen_tcp.close(socket)
+
+          {:error, :eaddrinuse} ->
+            Logger.error("""
+            port #{port} (#{purpose}) is already in use.
+
+            Set #{variable} to a free port, or stop whatever is listening there.
+            """)
+
+          {:error, _other} ->
+            :ok
+        end
+      end)
     end
   end
 

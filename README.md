@@ -92,8 +92,16 @@ git clone http://x-access-token:dev-token@localhost:4000/acme/app.git
 To run against real object storage, start MinIO and point at it:
 
 ```sh
-mise run e2e:up    # MinIO on :9000
+mise run e2e:up    # MinIO plus two clustered nodes
 mise run e2e       # the end-to-end suite, against a live server and real S3
+mise run e2e:down
+```
+
+Or bring up the whole system in containers, which is the closest thing to how
+it actually runs:
+
+```sh
+docker compose up --build -d
 ```
 
 ## Documentation
