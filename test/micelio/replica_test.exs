@@ -216,6 +216,44 @@ defmodule Micelio.ReplicaTest do
     assert map_size(refs) == 1
   end
 
+  describe "eviction racing a request" do
+    test "a replica evicted mid-flight is transparently restarted", %{repo: repo, source: source} do
+      # The reaper evicts idle repositories while requests are in flight, so a
+      # replica can die between being looked up and being called. That is
+      # routine cache management, not a fault, and it must not surface as a
+      # failed request.
+      push_commit(repo, source, "one")
+      {:ok, _} = Replica.ensure_fresh(repo)
+
+      results =
+        1..40
+        |> Task.async_stream(
+          fn n ->
+            # Evict from underneath the readers, repeatedly.
+            if rem(n, 4) == 0, do: Replica.evict(repo)
+            Replica.ensure_fresh(repo)
+          end,
+          max_concurrency: 20,
+          timeout: 60_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      failures = Enum.reject(results, &match?({:ok, _}, &1))
+      assert failures == [], "eviction should be invisible to readers, got: #{inspect(failures)}"
+    end
+
+    test "a repository still serves correctly after being evicted", %{repo: repo, source: source} do
+      %{oid: oid} = push_commit(repo, source, "one")
+
+      for _ <- 1..5 do
+        Replica.evict(repo)
+        assert {:ok, view} = Replica.ensure_fresh(repo)
+        assert {:ok, refs} = Git.refs(view.path)
+        assert refs["refs/heads/main"] == oid
+      end
+    end
+  end
+
   test "resident/0 lists repositories held on this node", %{repo: repo} do
     {:ok, _} = Replica.ensure_fresh(repo)
     assert repo in Replica.resident()

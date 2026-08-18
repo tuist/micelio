@@ -78,8 +78,32 @@ defmodule Micelio.Replica do
   """
   @spec ensure_fresh(String.t(), keyword()) :: {:ok, view()} | {:error, term()}
   def ensure_fresh(repo_id, opts \\ []) do
+    call(repo_id, {:ensure_fresh, opts}, Keyword.get(opts, :timeout, :timer.minutes(10)))
+  end
+
+  # A replica can go away between being looked up and being called: the reaper
+  # evicts idle repositories while requests are in flight, and an eviction is a
+  # normal stop rather than a fault. Treating that as an error would turn
+  # routine cache management into failed requests, so the call is simply
+  # retried against a freshly started replica.
+  #
+  # Only the "it is not there" exits are retried. A timeout means the replica
+  # is alive and busy, and retrying would make that worse.
+  defp call(repo_id, message, timeout, attempt \\ 1) do
     with {:ok, pid} <- ensure_started(repo_id) do
-      GenServer.call(pid, {:ensure_fresh, opts}, Keyword.get(opts, :timeout, :timer.minutes(10)))
+      try do
+        GenServer.call(pid, message, timeout)
+      catch
+        :exit, {reason, _details} when reason in [:noproc, :normal, :shutdown] ->
+          if attempt < 3 do
+            # Registry deregisters on process death through a monitor, which is
+            # asynchronous; yield so the next lookup does not find the corpse.
+            Process.sleep(5 * attempt)
+            call(repo_id, message, timeout, attempt + 1)
+          else
+            {:error, :replica_unavailable}
+          end
+      end
     end
   end
 
@@ -126,8 +150,16 @@ defmodule Micelio.Replica do
   @spec info(String.t()) :: {:ok, map()} | {:error, :not_resident}
   def info(repo_id) do
     case whereis(repo_id) do
-      nil -> {:error, :not_resident}
-      pid -> GenServer.call(pid, :info)
+      nil ->
+        {:error, :not_resident}
+
+      pid ->
+        try do
+          GenServer.call(pid, :info)
+        catch
+          :exit, {reason, _details} when reason in [:noproc, :normal, :shutdown] ->
+            {:error, :not_resident}
+        end
     end
   end
 
@@ -146,8 +178,17 @@ defmodule Micelio.Replica do
   @spec evict(String.t()) :: :ok
   def evict(repo_id) do
     case whereis(repo_id) do
-      nil -> :ok
-      pid -> GenServer.call(pid, :evict, :timer.seconds(30))
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.call(pid, :evict, :timer.seconds(30))
+        catch
+          # Already gone — because the reaper got there first, or another
+          # caller did. The goal is that it is not resident, and it is not.
+          :exit, {reason, _details} when reason in [:noproc, :normal, :shutdown] -> :ok
+        end
     end
   end
 
@@ -186,7 +227,9 @@ defmodule Micelio.Replica do
 
   defp whereis(repo_id) do
     case Registry.lookup(@registry, repo_id) do
-      [{pid, _}] -> pid
+      # A registration can outlive its process by the width of a monitor
+      # message, so liveness is checked rather than assumed.
+      [{pid, _}] -> if Process.alive?(pid), do: pid, else: nil
       [] -> nil
     end
   end

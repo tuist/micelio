@@ -94,24 +94,43 @@ defmodule Micelio.Ingest.Writer do
 
   @doc false
   @spec local_commit(String.t(), prepared(), timeout()) :: {:ok, map()} | {:error, term()}
-  def local_commit(repo_id, prepared, timeout) do
+  def local_commit(repo_id, prepared, timeout), do: local_commit(repo_id, prepared, timeout, 1)
+
+  defp local_commit(repo_id, prepared, timeout, attempt) do
     with {:ok, pid} <- ensure_started(repo_id) do
-      GenServer.call(pid, {:commit, prepared}, timeout)
+      try do
+        GenServer.call(pid, {:commit, prepared}, timeout)
+      catch
+        # The writer is transient and holds nothing durable, so if it went away
+        # between lookup and call, starting another and asking again is exactly
+        # equivalent. Retrying a timeout would not be.
+        :exit, {reason, _details} when reason in [:noproc, :normal, :shutdown] ->
+          if attempt < 3 do
+            Process.sleep(5 * attempt)
+            local_commit(repo_id, prepared, timeout, attempt + 1)
+          else
+            {:error, :writer_unavailable}
+          end
+      end
     end
   end
 
   @spec ensure_started(String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(repo_id) do
     case Registry.lookup(@registry, repo_id) do
-      [{pid, _}] ->
-        {:ok, pid}
+      [{pid, _}] when is_pid(pid) ->
+        if Process.alive?(pid), do: {:ok, pid}, else: start(repo_id)
 
-      [] ->
-        case DynamicSupervisor.start_child(@supervisor, {__MODULE__, {repo_id, Micelio.Config.overrides()}}) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          error -> error
-        end
+      _ ->
+        start(repo_id)
+    end
+  end
+
+  defp start(repo_id) do
+    case DynamicSupervisor.start_child(@supervisor, {__MODULE__, {repo_id, Micelio.Config.overrides()}}) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      error -> error
     end
   end
 

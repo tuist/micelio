@@ -100,8 +100,8 @@ jobs:
       - name: Regenerate and diff
         run: |
           ./scripts/generate-proto.sh
-          git diff --exit-code lib/micelio/wal/v1/wal.pb.ex \
-            || { echo "::error::wal.pb.ex is out of date; run 'mise run proto' and commit the result"; exit 1; }
+          git diff --exit-code lib/micelio/wal/v1 lib/micelio/policy/v1 \
+            || { echo "::error::generated schema is out of date; run 'mise run proto' and commit the result"; exit 1; }
 
   image:
     name: Container image
