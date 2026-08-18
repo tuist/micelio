@@ -66,8 +66,11 @@ round-robin Service, autoscaled like any stateless workload.
 - **An MCP server** — a headless Git forge for agents: read files, search, read
   history, and commit, all without cloning. See [docs/mcp.md](docs/mcp.md).
 - **OAuth 2.1 resource server** — validates tokens, never issues them. In
-  Kubernetes an agent authenticates with its projected service account token,
-  so no secret is ever distributed. See [docs/kubernetes.md](docs/kubernetes.md).
+  Kubernetes an agent authenticates with the projected service account token it
+  was born with, so no secret is ever distributed, and authorization lives in
+  object storage rather than in a service. See
+  [docs/kubernetes.md](docs/kubernetes.md) and
+  [docs/multi-tenancy.md](docs/multi-tenancy.md).
 - **Prometheus metrics and OpenTelemetry traces** — including the signals worth
   autoscaling on.
 

@@ -146,8 +146,16 @@ spec:
             - name: MICELIO_AUTH_BACKEND
               value: {{ .Values.auth.backend | quote }}
             {{- if eq .Values.auth.backend "oidc" }}
+            {{- with .Values.auth.oidc.issuer }}
             - name: MICELIO_OIDC_ISSUER
-              value: {{ .Values.auth.oidc.issuer | quote }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidc.kubernetes }}
+            # Empty issuer plus this tells the node to read the issuer from the
+            # cluster rather than assume it.
+            - name: MICELIO_OIDC_KUBERNETES
+              value: "true"
+            {{- end }}
             - name: MICELIO_OIDC_AUDIENCE
               value: {{ required "auth.oidc.audience is required: without it tokens are not bound to this deployment" .Values.auth.oidc.audience | quote }}
             {{- with .Values.auth.oidc.jwksUri }}

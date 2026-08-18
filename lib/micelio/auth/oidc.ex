@@ -112,9 +112,31 @@ defmodule Micelio.Auth.OIDC do
   end
 
   defp check_issuer(claims, config) do
+    case expected_issuer(config) do
+      nil ->
+        :ok
+
+      issuer ->
+        if claims["iss"] == issuer, do: :ok, else: {:error, {:issuer_mismatch, claims["iss"]}}
+    end
+  end
+
+  # Configured wins. Otherwise, in a cluster, the issuer is read from the API
+  # server rather than assumed — Kubernetes is reached at
+  # `kubernetes.default.svc` but issues tokens naming
+  # `kubernetes.default.svc.cluster.local`.
+  defp expected_issuer(config) do
     case Keyword.get(config, :issuer) do
-      nil -> :ok
-      issuer -> if claims["iss"] == issuer, do: :ok, else: {:error, {:issuer_mismatch, claims["iss"]}}
+      issuer when is_binary(issuer) and issuer != "" ->
+        issuer
+
+      _ ->
+        if Keyword.get(config, :kubernetes, false) do
+          case Micelio.Auth.JWKS.issuer(config) do
+            {:ok, issuer} -> issuer
+            {:error, _reason} -> nil
+          end
+        end
     end
   end
 

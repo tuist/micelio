@@ -122,7 +122,11 @@ Describe 'Authorization policy'
         git push '$(outsider_url "$NODE1_URL" "$repo")' main
       "
       The status should not equal 0
-      The stderr should include "not found"
+      # 403 rather than 404, and deliberately so: this caller can already read
+      # the repository, so concealing its existence protects nothing and only
+      # makes the refusal harder to act on. Concealment applies to callers who
+      # cannot read it — see the first example in this group.
+      The stderr should include "403"
     End
 
     It 'revokes access without reissuing the credential'

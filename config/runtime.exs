@@ -59,6 +59,15 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
 
   auth =
     case get.("MICELIO_AUTH_BACKEND", "webhook") do
+      "oidc" ->
+        {Micelio.Auth.OIDC,
+         issuer: System.get_env("MICELIO_OIDC_ISSUER"),
+         audience: require_env.("MICELIO_OIDC_AUDIENCE"),
+         jwks_uri: System.get_env("MICELIO_OIDC_JWKS_URI"),
+         kubernetes: get.("MICELIO_OIDC_KUBERNETES", "false") == "true",
+         namespace_grants: get.("MICELIO_OIDC_NAMESPACE_GRANTS", "true") == "true",
+         grants_claim: get.("MICELIO_OIDC_GRANTS_CLAIM", "micelio_grants")}
+
       "webhook" ->
         {Micelio.Auth.Webhook,
          endpoint: require_env.("MICELIO_AUTH_ENDPOINT"),

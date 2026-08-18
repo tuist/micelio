@@ -24,7 +24,7 @@ helm install micelio oci://ghcr.io/tuist/charts/micelio \
   --set objectStore.bucket=micelio \
   --set objectStore.endpoint=https://s3.eu-west-1.amazonaws.com \
   --set objectStore.existingSecret=micelio-s3 \
-  --set auth.oidc.issuer=https://kubernetes.default.svc \
+  --set auth.oidc.kubernetes=true \
   --set auth.oidc.audience=micelio
 ```
 
@@ -83,6 +83,23 @@ Every pod already has a projected service account token, which is an OIDC JWT
 the cluster's own issuer will vouch for. Micelio validates it against the
 cluster's JWKS. Nothing has to be created, distributed, rotated or revoked,
 because the kubelet already rotates it.
+
+Set `auth.oidc.kubernetes=true` and leave `auth.oidc.issuer` empty. Two details
+matter, and both are handled by the chart:
+
+  * **The cluster's discovery endpoint is not public.** It is served with the
+    cluster CA and requires authentication, so Micelio uses its own service
+    account token and the mounted CA to read it. That is the one API
+    permission Micelio ever needs — the read-only
+    `system:service-account-issuer-discovery` role — and the chart grants it
+    only when this backend is configured. Everything else, clustering
+    included, needs no API access at all.
+
+  * **Do not configure the issuer by hand.** Kubernetes is *reached* at
+    `https://kubernetes.default.svc` but *issues* tokens naming
+    `https://kubernetes.default.svc.cluster.local`. Configuring the address you
+    connect to rejects every token with an issuer mismatch, so Micelio asks the
+    cluster instead of guessing.
 
 ```yaml
 volumes:

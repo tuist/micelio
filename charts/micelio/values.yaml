@@ -47,9 +47,21 @@ auth:
   backend: oidc
 
   oidc:
-    # The cluster's own issuer, so pods authenticate with the projected service
-    # account token they already have. No secret is ever distributed.
-    issuer: https://kubernetes.default.svc
+    # Verify tokens against the cluster's own issuer, so pods authenticate with
+    # the projected service account token they already have and no secret is
+    # ever distributed.
+    #
+    # This grants Micelio the `system:service-account-issuer-discovery` role
+    # and mounts its own service account token, because the cluster's discovery
+    # endpoint requires authentication and is served with the cluster CA.
+    # Everything else Micelio does needs no API access at all.
+    kubernetes: true
+
+    # Leave empty when kubernetes is true: the issuer is read from the cluster
+    # rather than assumed. Kubernetes is reached at `kubernetes.default.svc`
+    # but issues tokens naming `kubernetes.default.svc.cluster.local`, so
+    # configuring the address you connect to rejects every token.
+    issuer: ""
     # Must match the audience on the projected token. Binding tokens to this
     # deployment is what stops a token minted for another service being
     # replayed here.
