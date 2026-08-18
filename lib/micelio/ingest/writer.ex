@@ -45,6 +45,18 @@ defmodule Micelio.Ingest.Writer do
   Entries in a batch are validated in order against the index as it evolves, so
   the outcome is identical to having processed them one at a time — including
   rejecting a push that a peer in the same batch just invalidated.
+
+  ## During a rolling deploy
+
+  Routing to a remote writer sends a closure across nodes, which requires both
+  to be running the same build. Mid-rollout they are not, so the call fails and
+  the receiving node commits for itself.
+
+  That is the fallback working as intended rather than an incident: throughput
+  drops back to one compare-and-swap per push for the duration of the rollout,
+  and correctness is untouched because the compare-and-swap was always what
+  ordered pushes. It is worth knowing only because a rollout is exactly when
+  someone might notice the CAS retry count rise and go looking for a cause.
   """
 
   use GenServer
@@ -197,13 +209,10 @@ defmodule Micelio.Ingest.Writer do
         Enum.each(froms, &GenServer.reply(&1, {:error, reason}))
     end
 
-    state = %{state | pending: [], last_batch_size: length(batch)}
-
-    # Anything that arrived while we were committing is already in the mailbox
-    # as a call; re-arm so it is flushed even though it is not the first.
-    if state.pending == [], do: :ok, else: send(self(), :flush)
-
-    {:noreply, state}
+    # No re-arming needed. Requests that arrived during the commit are still
+    # sitting in the mailbox as calls, and the first one handled will find an
+    # empty queue and schedule the next flush itself.
+    {:noreply, %{state | pending: [], last_batch_size: length(batch)}}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
