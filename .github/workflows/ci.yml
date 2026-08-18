@@ -178,3 +178,126 @@ jobs:
             --set autoscaling.enabled=true \
             --set ingress.enabled=true \
             --set serviceMonitor.enabled=true > /dev/null
+
+  # Linting and templating a chart proves it is valid YAML, and nothing more.
+  # Two bugs that stopped every pod from starting — Kubernetes injecting
+  # MICELIO_ADMIN_PORT from a same-named Service, and Helm rendering large
+  # integers as "2.68435456e+08" — passed both. The only way to know a chart
+  # deploys is to deploy it.
+  deploy:
+    name: Chart deploys and serves
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: micelio
+
+      - name: Build the image and load it into the cluster
+        run: |
+          docker build -t micelio:ci .
+          kind load docker-image micelio:ci --name micelio
+
+      - name: Deploy MinIO
+        run: |
+          kubectl create namespace micelio
+          kubectl -n micelio apply -f - <<'MANIFEST'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: {name: minio}
+          spec:
+            replicas: 1
+            selector: {matchLabels: {app: minio}}
+            template:
+              metadata: {labels: {app: minio}}
+              spec:
+                containers:
+                  - name: minio
+                    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+                    args: ["server", "/data"]
+                    env:
+                      - {name: MINIO_ROOT_USER, value: micelio}
+                      - {name: MINIO_ROOT_PASSWORD, value: micelio-secret}
+                    ports: [{containerPort: 9000}]
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata: {name: minio}
+          spec:
+            selector: {app: minio}
+            ports: [{port: 9000, targetPort: 9000}]
+          MANIFEST
+          kubectl -n micelio wait --for=condition=available deployment/minio --timeout=180s
+          kubectl -n micelio run mc --rm -i --restart=Never \
+            --image=minio/mc:RELEASE.2025-04-16T18-13-26Z \
+            --env=MC_HOST_local="http://micelio:micelio-secret@minio:9000" \
+            -- mb --ignore-existing local/micelio
+
+      - name: Install the chart
+        run: |
+          kubectl -n micelio create secret generic micelio-s3 \
+            --from-literal=MICELIO_S3_ACCESS_KEY_ID=micelio \
+            --from-literal=MICELIO_S3_SECRET_ACCESS_KEY=micelio-secret
+
+          helm install micelio charts/micelio -n micelio \
+            --set image.repository=micelio --set image.tag=ci --set image.pullPolicy=IfNotPresent \
+            --set replicaCount=2 \
+            --set objectStore.endpoint=http://minio:9000 \
+            --set objectStore.bucket=micelio \
+            --set objectStore.region=us-east-1 \
+            --set objectStore.existingSecret=micelio-s3 \
+            --set auth.backend=static \
+            --set auth.static.tokens='ci-token=acme:read\,write' \
+            --set adminToken=ci-admin \
+            --set resources.requests.cpu=100m \
+            --wait --timeout=300s
+
+      - name: The pods clustered themselves
+        run: |
+          pod=$(kubectl -n micelio get pods -l app.kubernetes.io/name=micelio -o jsonpath='{.items[0].metadata.name}')
+          members=$(kubectl -n micelio exec "$pod" -- \
+            curl -sS -H 'Authorization: Bearer ci-admin' http://127.0.0.1:4002/cluster)
+          echo "$members"
+          echo "$members" | grep -q 'micelio@.*micelio@' \
+            || { echo "::error::the pods did not form a cluster"; exit 1; }
+
+      - name: A push to one pod is served by another
+        run: |
+          mapfile -t pods < <(kubectl -n micelio get pods -l app.kubernetes.io/name=micelio -o name | sed 's|pod/||')
+
+          kubectl -n micelio exec "${pods[0]}" -- sh -c '
+            set -e
+            curl -sS -X POST -H "Authorization: Bearer ci-admin" -H "Content-Type: application/json" \
+              -d "{\"repository\":\"acme/ci\"}" http://127.0.0.1:4002/repositories >/dev/null
+            export HOME=/tmp GIT_AUTHOR_NAME=CI GIT_AUTHOR_EMAIL=ci@e GIT_COMMITTER_NAME=CI GIT_COMMITTER_EMAIL=ci@e
+            mkdir -p /tmp/s && cd /tmp/s && git init -q -b main
+            echo hello > README.md && git add . && git commit -qm init
+            git push -q http://x-access-token:ci-token@127.0.0.1:4000/acme/ci.git main
+          '
+
+          # The second pod has never seen this repository and must materialize
+          # it from the log on the first request.
+          kubectl -n micelio exec "${pods[1]}" -- sh -c '
+            export HOME=/tmp
+            git clone -q http://x-access-token:ci-token@127.0.0.1:4000/acme/ci.git /tmp/c
+            grep -q hello /tmp/c/README.md
+          '
+
+      - name: Serving through the Service, which round-robins across pods
+        run: |
+          kubectl -n micelio run gitclient --rm -i --restart=Never --image=alpine/git:latest --command -- sh -c '
+            set -e
+            export HOME=/tmp
+            for i in 1 2 3 4; do
+              git clone -q http://x-access-token:ci-token@micelio:4000/acme/ci.git /tmp/c$i
+              grep -q hello /tmp/c$i/README.md
+            done
+          '
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n micelio get pods -o wide || true
+          kubectl -n micelio describe pods -l app.kubernetes.io/name=micelio || true
+          kubectl -n micelio logs -l app.kubernetes.io/name=micelio --tail=100 --prefix || true
