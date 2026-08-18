@@ -172,7 +172,12 @@ defmodule Micelio.Replica do
   end
 
   defp start_replica(repo_id) do
-    case DynamicSupervisor.start_child(@supervisor, {__MODULE__, repo_id}) do
+    # A DynamicSupervisor child does not inherit `$callers`, so the starter's
+    # configuration overrides are captured here and reinstated in `init/1`.
+    # In production there are none and this is an empty map.
+    child = {__MODULE__, {repo_id, Config.overrides()}}
+
+    case DynamicSupervisor.start_child(@supervisor, child) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       error -> error
@@ -187,22 +192,31 @@ defmodule Micelio.Replica do
   end
 
   @doc false
-  def child_spec(repo_id) do
-    %{id: {__MODULE__, repo_id}, start: {__MODULE__, :start_link, [repo_id]}, restart: :transient}
+  def child_spec({repo_id, overrides}) do
+    %{
+      id: {__MODULE__, repo_id},
+      start: {__MODULE__, :start_link, [{repo_id, overrides}]},
+      restart: :transient
+    }
   end
 
+  def child_spec(repo_id), do: child_spec({repo_id, %{}})
+
   @doc false
-  def start_link(repo_id) do
-    GenServer.start_link(__MODULE__, repo_id, name: {:via, Registry, {@registry, repo_id}})
+  def start_link({repo_id, overrides}) do
+    GenServer.start_link(__MODULE__, {repo_id, overrides}, name: {:via, Registry, {@registry, repo_id}})
   end
+
+  def start_link(repo_id), do: start_link({repo_id, %{}})
 
   # ----------------------------------------------------------------------
   # Server
   # ----------------------------------------------------------------------
 
   @impl true
-  def init(repo_id) do
+  def init({repo_id, overrides}) do
     Process.flag(:trap_exit, true)
+    if map_size(overrides) > 0, do: Config.put_overrides(overrides)
     now = System.monotonic_time(:millisecond)
 
     {:ok,

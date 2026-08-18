@@ -25,16 +25,38 @@ clone entirely.
 Transport is Streamable HTTP. `GET /mcp` returns `405`: Micelio never initiates
 messages, so there is nothing a server-to-client stream would carry.
 
-## No sessions, and why that matters
+## Stateless, in the protocol's own terms
 
-Micelio keeps no session state. `Mcp-Session-Id` is echoed if a client sends one
-so client-side correlation works, but nothing on the server depends on it.
+Micelio implements revision **2026-07-28**, which removed the `initialize`
+handshake. Every request declares its own protocol version — in `_meta` under
+`io.modelcontextprotocol/protocolVersion`, and on HTTP also in the
+`MCP-Protocol-Version` header — and the server accepts or rejects each one
+independently. A version this server does not implement comes back as
 
-This is deliberate. A session store would be the one piece of cluster-wide
-mutable state the architecture has otherwise avoided, and it would need
-replicating, expiring and reconciling. Without it, an agent can be
-load-balanced across pods mid-conversation and nothing breaks — a plain
+```json
+{"jsonrpc":"2.0","id":1,"error":{"code":-32022,
+ "message":"Unsupported protocol version",
+ "data":{"supported":["2026-07-28","2025-11-25"],"requested":"1900-01-01"}}}
+```
+
+so a client can retry with something mutually supported rather than guess.
+
+`server/discover` is mandatory and returns supported versions, capabilities and
+identity in one request. It is cacheable — everything in it is compiled in — so
+it advertises a TTL and a public cache scope.
+
+Nothing is stored between requests. A session store would be the one piece of
+cluster-wide mutable state this architecture has otherwise avoided, and it
+would need replicating, expiring and reconciling. Without it, an agent can be
+load-balanced across pods mid-conversation and nothing breaks: a plain
 round-robin Service is enough, with no affinity rules and no sidecar router.
+
+### Older clients still work
+
+Revisions up to `2025-11-25` open with `initialize`, and that path is kept.
+Legacy clients have no fall-forward mechanism, so dropping it would simply
+break them. Since this server holds no session state either way, the two eras
+differ only in how a version gets declared.
 
 ## Every call routes itself
 

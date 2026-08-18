@@ -190,6 +190,58 @@ On the BEAM most of it already exists:
 | Per-repository single-flight coordination | `Registry` + `DynamicSupervisor` + a GenServer mailbox |
 | Cross-node introspection RPC | `:erpc.call/4` |
 
+### Why not Horde, Swarm, syn or libring
+
+The ecosystem's clustering libraries are good, and none of them fit, for one
+reason: they all solve *global process uniqueness*, and Micelio does not want
+it.
+
+[Horde](https://github.com/elixir-horde/horde), [Swarm](https://github.com/bitwalker/swarm)
+and [syn](https://github.com/ostinelli/syn) exist to guarantee that a given key
+maps to exactly one process somewhere in the cluster, and to keep a replicated
+registry saying where. Horde does it with a δ-CRDT; on netsplit heal it picks a
+winner for each contested name and sends the loser an exit signal. syn does it
+with its own replication and conflict resolution. That machinery is the whole
+value proposition, and it is precisely what we would have to fight.
+
+Two nodes serving the same repository at the same time is not a conflict here.
+It is the steady state — that is what a replica *is*. Two nodes accepting
+pushes for the same repository at the same time is also fine, because ordering
+is decided by a compare-and-swap in object storage rather than by which process
+holds a name. Adopting a distributed registry would mean installing an
+invariant we do not want, paying for the replicated state that maintains it,
+and then explaining why its netsplit resolution keeps killing healthy replicas.
+
+`:pg` is the right level. It answers "which nodes are ready to serve", which is
+all placement needs, and it is in OTP rather than a dependency. Its documented
+weakness — membership views are strongly eventually consistent and not
+transitive during a partition — is harmless here, because a wrong membership
+view produces a suboptimal *placement*, never an incorrect *result*: whoever
+ends up serving still verifies against the log.
+
+[libring](https://github.com/bitwalker/libring) is the closest thing to a
+drop-in for the placement half, but it implements consistent hashing (ketama)
+rather than rendezvous. Consistent hashing needs virtual nodes to balance
+acceptably and does not naturally yield an ordered top-N, which is exactly what
+a replica list is. Rendezvous gives that ordering for free, has better balance
+without tuning, and fits in about fifteen lines — see
+`Micelio.Cluster.Rendezvous`.
+
+### The known ceiling
+
+Distributed Erlang is a full mesh: every node connects to every other, so
+connections grow with the square of the cluster and the failure detector gets
+chattier as it grows. In practice this is comfortable into the low hundreds of
+nodes and stops being comfortable somewhere after that.
+
+If a single cluster ever needs to exceed that, the answer is
+[Partisan](https://github.com/lasp-lang/partisan) — an alternative distribution
+layer with non-mesh topologies — and not a registry library, which would not
+address the constraint at all. Nothing in this design assumes a single global
+cluster, though: rendezvous hashing makes each cluster self-sufficient, so one
+cluster per region against a regional bucket is the simpler answer to the same
+problem.
+
 Hints stay **advisory** regardless. A replica never treats a hint as evidence of
 anything; it treats it as a reason to go and re-validate against object storage.
 Losing every hint in the cluster costs latency, never correctness. That is what
@@ -209,12 +261,57 @@ is the part that had to be written.
   index is snapshotted, so every state a repository has ever been in is
   reconstructible.
 
+## Write throughput
+
+A push costs one conditional read and one conditional write of the index. Left
+alone, concurrent pushes to one repository contend for the same
+compare-and-swap: most lose, re-read and retry, so adding writers makes each
+one slower without making the repository faster.
+
+The instinct is to elect a writer so that everyone agrees who may commit. That
+is the expensive answer. An election has to conclude before anything can be
+written, and a partition stalls writes until it does — trading away exactly the
+availability the rest of the design works to keep.
+
+What is needed is weaker than agreement. Rendezvous hashing already names a
+*preferred* writer, computed identically on every node from the live
+membership, with no agreement round at all. Routing writes there concentrates
+them on one process, and that process can then batch:
+
+```
+    push A ─┐
+    push B ─┼─► writer ──► one read, one compare-and-swap ──► seqs 7, 8, 9
+    push C ─┘
+```
+
+Each push still uploads its own packs and its own entry object first — those
+are content-addressed, so they never contend and they happen wherever the push
+arrived. Only installing the pointers is serialized, and that costs the same
+one round trip whether the batch holds one push or fifty.
+
+The batching is implicit rather than timed: the writer commits whatever has
+arrived, and anything that arrives during that round trip forms the next batch.
+Under light load nothing waits; under heavy load batches grow exactly as fast
+as contention would otherwise have grown. There is no timer to tune.
+
+Crucially the routing is a **hint, not a rule**. Being wrong about who the
+writer is costs nothing, because the batch still lands through the same
+compare-and-swap that already handles two nodes writing at once. When the
+preferred node is unreachable, the receiving node simply commits for itself.
+That is the difference between this and an election: there is no state to be
+inconsistent about, so there is nothing to repair when the answer changes.
+
+Entries within a batch are validated in order against the index as it evolves,
+so the result is identical to having processed them one at a time — including
+rejecting a push that a peer in the same batch just invalidated.
+
+See `Micelio.Ingest.Writer`.
+
 ## Where the limits are
 
-- **Per-repository write throughput is bounded by object store latency.** Each
-  push is at least one conditional GET and one conditional PUT. A single hot
-  repository will not scale past what one CAS chain can sustain, which is why
-  the CAS retry count is a metric worth watching.
+- **A single repository's writes are still bounded by object store latency**,
+  now per batch rather than per push. Group commit raises the ceiling by the
+  batch size; it does not remove it.
 - **Read throughput scales linearly with replicas** and is bounded by nothing in
   particular, which is the point.
 - **Compaction is the one expensive operation** and is why the primary concept

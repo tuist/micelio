@@ -5,12 +5,31 @@ defmodule Micelio.HTTP.GitBackend do
   Both directions have to be live. A `git clone` of a large monorepo produces
   gigabytes that must not be buffered, and a `git push` sends a packfile of
   arbitrary size that must not be buffered either. So the request body is fed
-  to the process in chunks while its output is drained in the same loop.
+  to the process in chunks, and its output is drained in the same loop.
 
   Draining while writing is not an optimisation. A pipe has a fixed buffer: if
   we wrote the whole request without reading, and the process wrote enough
   output to fill its side, both ends would block forever waiting for the other.
   Interleaving is what makes that impossible.
+
+  ## Why the response starts only after the request is consumed
+
+  Output produced while the request is still arriving is held in memory, and
+  the response is not begun until the request body is fully written. That looks
+  like needless buffering and is not:
+
+  Git speaks HTTP through libcurl, which sends `Expect: 100-continue` for
+  bodies over a kilobyte and waits to be told to proceed. The `100 Continue` is
+  emitted when the server first reads the body — so a server that sends its
+  response headers *before* reading has already answered, and a client that is
+  still waiting for permission to send can stall until something times it out.
+  It is the kind of bug that hides on loopback, where curl's short wait expires
+  and it sends anyway, and appears the moment a proxy sits in the path.
+
+  Buffering costs nothing in practice because the two directions are never
+  large at the same time: `upload-pack` receives a tiny request and produces a
+  huge response, and `receive-pack` receives a huge request and produces a tiny
+  report. Only the small side is ever held.
 
   A client that disconnects mid-clone, or a handler that crashes, takes the
   `git` process with it via `Micelio.Git.terminate/1`. Leaked `upload-pack`
@@ -38,19 +57,58 @@ defmodule Micelio.HTTP.GitBackend do
 
     port = Git.stream(repo_path, args, env: env)
 
-    conn =
-      conn
-      |> put_resp_content_type(content_type)
-      |> put_no_cache()
-      |> send_chunked(200)
-
     result =
-      case pump_request(conn, port) do
-        {:ok, conn} -> drain(conn, port, 0)
-        {:error, conn, reason} -> {:error, conn, reason}
+      case pump_request(conn, port, []) do
+        {:ok, conn, buffered} ->
+          buffered = Enum.reverse(buffered)
+
+          conn =
+            conn
+            |> put_resp_content_type(content_type)
+            |> put_no_cache()
+            |> send_chunked(200)
+
+          case flush_buffered(conn, buffered) do
+            {:ok, conn, bytes} -> drain(conn, port, bytes)
+            {:error, conn, reason} -> {:error, conn, reason}
+          end
+
+        {:error, conn, reason} ->
+          # Nothing has been sent yet, so this can still be an honest status
+          # code rather than a truncated stream.
+          {:aborted, refuse(conn, reason), reason}
       end
 
     finish(result, port, started, opts)
+  end
+
+  defp refuse(conn, {:exited_early, _status}) do
+    send_resp(conn, 500, "micelio: the git process exited before the request was complete\n")
+  end
+
+  defp refuse(conn, _reason) do
+    send_resp(conn, 400, "micelio: the request could not be read\n")
+  end
+
+  defp flush_buffered(conn, buffered) do
+    Enum.reduce_while(buffered, {:ok, conn, 0}, fn data, {:ok, conn, bytes} ->
+      case chunk(conn, data) do
+        {:ok, conn} -> {:cont, {:ok, conn, bytes + byte_size(data)}}
+        {:error, reason} -> {:halt, {:error, conn, {:client_gone, reason}}}
+      end
+    end)
+  end
+
+  defp finish({:aborted, conn, reason}, port, started, opts) do
+    Git.terminate(port)
+
+    :telemetry.execute(
+      [:micelio, :git, :aborted],
+      %{duration_ms: System.monotonic_time(:millisecond) - started},
+      %{service: Keyword.get(opts, :service), repo_id: Keyword.get(opts, :repo_id), reason: reason}
+    )
+
+    conn
   end
 
   defp finish({:ok, conn, bytes}, _port, started, opts) do
@@ -76,48 +134,34 @@ defmodule Micelio.HTTP.GitBackend do
     conn
   end
 
-  # Read the request body in chunks, writing each to the process and draining
-  # whatever it has produced so far.
-  defp pump_request(conn, port) do
+  # Read the request body in chunks, writing each to the process and collecting
+  # whatever it has produced so far. Reading the body is also what makes the
+  # server emit `100 Continue`, which is why it happens before any response.
+  defp pump_request(conn, port, buffered) do
     case read_body(conn, length: @read_chunk, read_length: @read_chunk) do
       {:more, chunk, conn} ->
         Port.command(port, chunk)
-
-        case drain_available(conn, port) do
-          {:ok, conn} -> pump_request(conn, port)
-          error -> error
-        end
+        pump_request(conn, port, collect_available(port, buffered))
 
       {:ok, chunk, conn} ->
         if chunk != "", do: Port.command(port, chunk)
-        # `--stateless-rpc` treats end of input as end of request, so the
-        # process needs to see EOF rather than just a pause.
-        close_stdin(port)
-        {:ok, conn}
+        # `--stateless-rpc` frames a request with a flush packet, which the
+        # client has now sent, so the process can proceed without seeing EOF —
+        # which a port cannot signal anyway.
+        {:ok, conn, collect_available(port, buffered)}
 
       {:error, reason} ->
         {:error, conn, {:request_body, reason}}
     end
   end
 
-  # A port cannot half-close stdin, so signal end of input the way the wrapper
-  # understands: stop writing and let the process see the pipe drain. Git's
-  # stateless-rpc mode is framed by a flush packet, which the client already
-  # sent, so this is belt and braces rather than the primary mechanism.
-  defp close_stdin(_port), do: :ok
-
-  defp drain_available(conn, port) do
+  # Non-blocking: take whatever the process has already written so its pipe
+  # cannot fill while we are still feeding it.
+  defp collect_available(port, buffered) do
     receive do
-      {^port, {:data, data}} ->
-        case chunk(conn, data) do
-          {:ok, conn} -> drain_available(conn, port)
-          {:error, reason} -> {:error, conn, {:client_gone, reason}}
-        end
-
-      {^port, {:exit_status, status}} ->
-        {:error, conn, {:exited_early, status}}
+      {^port, {:data, data}} -> collect_available(port, [data | buffered])
     after
-      0 -> {:ok, conn}
+      0 -> buffered
     end
   end
 

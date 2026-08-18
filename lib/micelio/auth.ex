@@ -62,16 +62,39 @@ defmodule Micelio.Auth do
     end
   end
 
-  @doc "Whether `principal` may perform `permission` on `repo_id`."
+  @doc """
+  Whether `principal` may perform `permission` on `repo_id`.
+
+  Two sources are consulted, and either suffices:
+
+    * the grants the credential itself carried, which is how a machine identity
+      authorises itself with a token it was born with, and
+    * the account's policy in object storage, which is how grants are changed
+      without reissuing anything — and revoked without waiting for a token to
+      expire.
+
+  The policy is only read when the token alone is not enough, so the common
+  case for machine identities costs nothing.
+  """
   @spec authorize(Principal.t(), String.t(), Principal.permission()) :: :ok | {:error, :forbidden}
   def authorize(%Principal{} = principal, repo_id, permission) do
-    if Principal.allows?(principal, repo_id, permission) do
+    if Principal.allows?(principal, repo_id, permission) or granted_by_policy?(principal, repo_id, permission) do
       :telemetry.execute([:micelio, :auth, :authorized], %{}, %{permission: permission, repo_id: repo_id})
       :ok
     else
       :telemetry.execute([:micelio, :auth, :denied], %{}, %{permission: permission, repo_id: repo_id})
       {:error, :forbidden}
     end
+  end
+
+  defp granted_by_policy?(principal, repo_id, permission) do
+    account = Micelio.Policy.account_of(repo_id)
+
+    account
+    |> Micelio.Policy.grants_for(principal.subject)
+    |> Enum.any?(fn %{pattern: pattern, permissions: permissions} ->
+      Principal.matches?(pattern, repo_id) and (permission in permissions or :admin in permissions)
+    end)
   end
 
   @doc """

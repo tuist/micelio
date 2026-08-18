@@ -21,6 +21,16 @@ export E2E_S3_BUCKET="${E2E_S3_BUCKET:-micelio-e2e}"
 export E2E_S3_KEY="${E2E_S3_KEY:-micelio}"
 export E2E_S3_SECRET="${E2E_S3_SECRET:-micelio-secret}"
 
+# A git configuration of our own, so the suite cannot be influenced by — or
+# blocked on — whatever the developer has configured. On macOS in particular,
+# the keychain credential helper blocks storing a credential for a host it has
+# not seen before, and the symptom is a git command that hangs forever with no
+# output at all.
+export E2E_GITCONFIG="${STACK_DIR:-${MICELIO_ROOT}/tmp/e2e}/gitconfig"
+export GIT_CONFIG_GLOBAL="$E2E_GITCONFIG"
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_TERMINAL_PROMPT=0
+
 export E2E_TOKEN="e2e-token"
 export E2E_ADMIN_TOKEN="e2e-admin-token"
 
@@ -33,9 +43,22 @@ export NODE1_ADMIN_URL="http://127.0.0.1:${NODE1_ADMIN}"
 export NODE2_ADMIN_URL="http://127.0.0.1:${NODE2_ADMIN}"
 
 stack::minio_up() {
-  if curl -fsS "${E2E_S3_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+  if docker ps --filter name=micelio-e2e-minio --format '{{.Names}}' 2>/dev/null | grep -q micelio-e2e-minio; then
     echo "minio: already running at ${E2E_S3_ENDPOINT}"
     return 0
+  fi
+
+  # A healthy endpoint alone is not proof it is *ours*: another stack may have
+  # taken the port, and quietly using its storage is worse than failing.
+  if curl -fsS "${E2E_S3_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+    if [ -n "${E2E_S3_EXTERNAL:-}" ]; then
+      echo "minio: using the store already at ${E2E_S3_ENDPOINT}"
+      return 0
+    fi
+
+    echo "something is already serving ${E2E_S3_ENDPOINT}, but it is not our MinIO." >&2
+    echo "Set E2E_S3_PORT to a free port, or E2E_S3_EXTERNAL=1 to use it deliberately." >&2
+    return 1
   fi
 
   if ! command -v docker >/dev/null 2>&1; then
@@ -63,16 +86,33 @@ stack::minio_up() {
 }
 
 stack::bucket() {
-  # Joins the MinIO container's network namespace, so this works regardless of
-  # which host port MinIO ended up on.
-  docker run --rm --network container:micelio-e2e-minio \
-    -e MC_HOST_local="http://${E2E_S3_KEY}:${E2E_S3_SECRET}@127.0.0.1:9000" \
-    minio/mc:RELEASE.2025-04-16T18-13-26Z \
-    mb --ignore-existing "local/${E2E_S3_BUCKET}" >/dev/null 2>&1 || true
+  # Reached over the host port rather than by joining a container, so this also
+  # works when E2E_S3_ENDPOINT points at a store we did not start.
+  #
+  # Verified rather than best-effort. A silently missing bucket does not fail
+  # here; it fails much later as a repository that cannot be created, which is
+  # a considerably worse place to find out.
+  stack::mc mb --ignore-existing "local/${E2E_S3_BUCKET}" || {
+    echo "could not create the bucket ${E2E_S3_BUCKET} at ${E2E_S3_ENDPOINT}" >&2
+    return 1
+  }
+
+  stack::mc ls "local/${E2E_S3_BUCKET}" || {
+    echo "bucket ${E2E_S3_BUCKET} is not readable after creation" >&2
+    return 1
+  }
+
+  echo "minio: bucket ${E2E_S3_BUCKET} ready"
 }
 
-# Run through mise when the toolchain is not already on PATH, so the script
-# works both from `mise run` and when invoked directly.
+stack::mc() {
+  docker run --rm \
+    --add-host=host.docker.internal:host-gateway \
+    -e MC_HOST_local="http://${E2E_S3_KEY}:${E2E_S3_SECRET}@host.docker.internal:${E2E_S3_PORT}" \
+    minio/mc:RELEASE.2025-04-16T18-13-26Z \
+    "$@" >/dev/null 2>&1
+}
+
 stack::mise_prefix() {
   if command -v elixir >/dev/null 2>&1; then
     echo ""
@@ -147,8 +187,25 @@ stack::wait_for() {
   return 1
 }
 
+stack::gitconfig() {
+  mkdir -p "$(dirname "$E2E_GITCONFIG")"
+
+  cat > "$E2E_GITCONFIG" <<'GITCONFIG'
+[credential]
+	helper =
+[user]
+	name = Micelio E2E
+	email = e2e@example.com
+[init]
+	defaultBranch = main
+[protocol]
+	version = 2
+GITCONFIG
+}
+
 stack::up() {
   mkdir -p "${STACK_DIR}"
+  stack::gitconfig
   stack::minio_up
   stack::bucket
 

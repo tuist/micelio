@@ -6,12 +6,29 @@ defmodule Micelio.MCP.Server do
   and returns a decoded response, so the HTTP layer stays a thin adapter and
   the protocol can be exercised in tests without a socket.
 
-  Sessions are not stored. Every request carries its own credential and every
-  tool call is routed to the right node from scratch, which means an agent can
+  ## Stateless, in the protocol's own terms
+
+  Revision `2026-07-28` removed the `initialize` handshake: every request
+  declares its own protocol version in `_meta`, and the server accepts or
+  rejects each one independently. `server/discover` replaces the handshake for
+  clients that want to ask up front.
+
+  That is a good fit here, because it was already true of this implementation.
+  Nothing is stored between requests: every request carries its own credential
+  and every tool call is routed to the right node from scratch, so an agent can
   be load-balanced across pods mid-conversation without anything breaking. A
   session store would be the one piece of cluster-wide mutable state this
-  design has otherwise managed to avoid, and it would have to be replicated,
-  expired and reconciled — so there isn't one.
+  architecture has otherwise managed to avoid, and it would have to be
+  replicated, expired and reconciled.
+
+  ## Dual-era
+
+  Legacy clients (`2025-11-25` and earlier) still open with `initialize`, and
+  that path is kept: those clients have no fall-forward mechanism, so dropping
+  it would simply break them. A request carrying modern `_meta` is served under
+  the current revision; an `initialize` selects legacy semantics. Since this
+  server holds no session state either way, the two eras differ only in how a
+  version is declared.
   """
 
   require Logger
@@ -24,8 +41,18 @@ defmodule Micelio.MCP.Server do
   @method_not_found -32_601
   @invalid_params -32_602
 
-  @protocol_version "2025-06-18"
-  @supported_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
+  # The current revision, and every earlier one whose semantics this server
+  # still satisfies. Nothing here holds session state, so supporting the older
+  # handshake-based revisions costs only the `initialize` clause.
+  @protocol_version "2026-07-28"
+  @supported_versions ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+
+  # Where a modern request declares its version.
+  @version_meta_key "io.modelcontextprotocol/protocolVersion"
+  @server_info_meta_key "io.modelcontextprotocol/serverInfo"
+
+  # Reserved by the specification for an unsupported protocol version.
+  @unsupported_version -32_022
 
   @spec protocol_version() :: String.t()
   def protocol_version, do: @protocol_version
@@ -41,6 +68,10 @@ defmodule Micelio.MCP.Server do
   @spec invalid_request_code() :: integer()
   def invalid_request_code, do: @invalid_request
 
+  @doc "The specification's code for an unsupported protocol version."
+  @spec unsupported_version_code() :: integer()
+  def unsupported_version_code, do: @unsupported_version
+
   @doc """
   Handle one JSON-RPC message.
 
@@ -53,7 +84,12 @@ defmodule Micelio.MCP.Server do
     params = Map.get(message, "params") || %{}
 
     started = System.monotonic_time(:microsecond)
-    result = dispatch(method, params, opts)
+
+    result =
+      case check_version(method, params, opts) do
+        :ok -> dispatch(method, params, opts)
+        {:error, _, _, _} = error -> error
+      end
 
     :telemetry.execute(
       [:micelio, :mcp, :request],
@@ -72,28 +108,63 @@ defmodule Micelio.MCP.Server do
 
   def handle(_message, _opts), do: {:reply, error(nil, @invalid_request, "invalid request")}
 
+  # A request declares its version per-request rather than once per session.
+  # `initialize` is exempt: it *is* the legacy version declaration.
+  #
+  # A request that declares nothing is accepted. A legacy client's follow-up
+  # requests carry no version, and with no session to consult there is nothing
+  # to check them against; since this server behaves identically across every
+  # revision it supports, refusing them would break interoperability to prove a
+  # point.
+  defp check_version("initialize", _params, _opts), do: :ok
+
+  defp check_version(_method, params, opts) do
+    declared = get_in(params, ["_meta", @version_meta_key]) || Keyword.get(opts, :protocol_version)
+
+    cond do
+      is_nil(declared) -> :ok
+      declared in @supported_versions -> :ok
+      true -> {:error, @unsupported_version, "Unsupported protocol version", unsupported_data(declared)}
+    end
+  end
+
+  defp unsupported_data(requested) do
+    %{supported: @supported_versions, requested: requested}
+  end
+
   # ----------------------------------------------------------------------
   # Methods
   # ----------------------------------------------------------------------
 
+  # Mandatory in the current revision: it replaces the handshake for clients
+  # that want the server's versions, capabilities and identity up front.
+  defp dispatch("server/discover", _params, opts) do
+    {:ok,
+     %{
+       resultType: "complete",
+       supportedVersions: @supported_versions,
+       capabilities: capabilities(),
+       instructions: instructions(opts),
+       # Discovery is derived entirely from compiled-in values, so it is safe
+       # to cache and pointless to recompute.
+       ttlMs: 3_600_000,
+       cacheScope: "public",
+       _meta: %{@server_info_meta_key => server_info()}
+     }}
+  end
+
   defp dispatch("initialize", params, opts) do
     requested = params["protocolVersion"]
 
+    # A legacy client cannot fall forward, so answer with something it can use
+    # rather than refusing outright.
     version = if requested in @supported_versions, do: requested, else: @protocol_version
 
     {:ok,
      %{
        protocolVersion: version,
-       capabilities: %{
-         tools: %{listChanged: false},
-         resources: %{subscribe: false, listChanged: false},
-         logging: %{}
-       },
-       serverInfo: %{
-         name: "micelio",
-         title: "Micelio",
-         version: Micelio.version()
-       },
+       capabilities: capabilities(),
+       serverInfo: server_info(),
        instructions: instructions(opts)
      }}
   end
@@ -153,6 +224,18 @@ defmodule Micelio.MCP.Server do
   defp dispatch("logging/setLevel", _params, _opts), do: {:ok, %{}}
 
   defp dispatch(method, _params, _opts), do: {:error, @method_not_found, "method not found: #{method}"}
+
+  defp capabilities do
+    %{
+      tools: %{listChanged: false},
+      resources: %{subscribe: false, listChanged: false},
+      logging: %{}
+    }
+  end
+
+  defp server_info do
+    %{name: "micelio", title: "Micelio", version: Micelio.version()}
+  end
 
   # ----------------------------------------------------------------------
 

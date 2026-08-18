@@ -67,6 +67,9 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
     # against the object store. 0 means "verify every read", which is the
     # guarantee the design is built on; raise it only knowingly.
     staleness_budget_ms: String.to_integer(get.("MICELIO_STALENESS_BUDGET_MS", "0")),
+    # Authorization is checked on every request, so unlike a repository read
+    # this is not zero by default; see docs/multi-tenancy.md.
+    policy_staleness_budget_ms: String.to_integer(get.("MICELIO_POLICY_STALENESS_BUDGET_MS", "5000")),
     compaction_entry_threshold: String.to_integer(get.("MICELIO_COMPACTION_ENTRY_THRESHOLD", "250")),
     compaction_bytes_threshold: String.to_integer(get.("MICELIO_COMPACTION_BYTES_THRESHOLD", "268435456")),
     idle_eviction_ms: String.to_integer(get.("MICELIO_IDLE_EVICTION_MS", "3600000")),

@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+// Authorization policy.
+//
+// Authentication and authorization are separated deliberately, because they
+// have different natures. *Who you are* cannot be established without a secret
+// somebody holds, so it is inherently external: Micelio validates tokens
+// against an issuer's public keys and never mints them. *What you may do* is
+// just data — and data belongs in the same object storage as everything else.
+//
+// Putting policy here rather than in a database is what keeps the deployment
+// free of a control plane. A policy object is read with a conditional GET and
+// updated with a compare-and-swap, exactly like a repository's write-ahead log
+// index, so every node can serve it, any node can change it, and nothing has
+// to be kept in sync.
+//
+// It also fixes the one real weakness of putting grants in token claims:
+// revocation. A claim is true until the token expires, which may be an hour. A
+// binding removed here is gone on the next read.
+package micelio.policy.v1;
+
+// Grants one subject a set of permissions over a set of repositories.
+message Binding {
+  // The authenticated subject, as the identity provider reports it. For
+  // Kubernetes that is `system:serviceaccount:<namespace>:<name>`; for a human
+  // it is whatever the issuer puts in `sub`.
+  //
+  // Glob patterns are allowed, so a whole namespace of service accounts can be
+  // bound at once.
+  string subject = 1;
+
+  // Repository patterns, matched the same way everywhere else: `*` within one
+  // path segment, `**` across segments.
+  repeated string repositories = 2;
+
+  // "read", "write" or "admin". Unrecognised values are ignored rather than
+  // trusted, so a newer node adding a permission cannot be tricked into
+  // granting it by an older one.
+  repeated string permissions = 3;
+
+  // Free text, for whoever has to audit this later.
+  string note = 4;
+
+  int64 created_at_ms = 5;
+
+  // When set, the binding stops applying after this instant. Useful for
+  // granting an agent access for the duration of a task.
+  int64 expires_at_ms = 6;
+}
+
+// One account's policy. The only mutable object per account, and the only one
+// under compare-and-swap.
+message Policy {
+  string account = 1;
+  repeated Binding bindings = 2;
+  // Incremented on every successful update, so a caller can tell whether the
+  // policy it read is the one it changed.
+  uint64 version = 3;
+  int64 created_at_ms = 4;
+  int64 updated_at_ms = 5;
+  string updated_by = 6;
+}

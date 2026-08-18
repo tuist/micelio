@@ -1,8 +1,35 @@
-# Local stack: MinIO plus two Micelio nodes.
+# The whole system, locally.
 #
-# Two nodes rather than one on purpose. Almost everything interesting here is
-# about what happens between replicas, and a single node cannot show you a
-# replica catching up on someone else's push.
+# MinIO stands in for S3, and two Micelio nodes cluster with each other. Two
+# rather than one on purpose: almost everything interesting here happens
+# *between* replicas, and a single node cannot show you a push to one node
+# being immediately visible on another, which is the central claim.
+#
+#   docker compose up --build -d
+#   docker compose ps                      # wait for healthy
+#
+#   # create a repository (any node will do; there is no primary to find)
+#   curl -X POST localhost:14002/repositories \
+#     -H 'Authorization: Bearer local-admin-token' \
+#     -H 'content-type: application/json' \
+#     -d '{"repository":"acme/app"}'
+#
+#   # push to node 1
+#   git clone http://x-access-token:local-token@localhost:14000/acme/app.git
+#
+# On macOS, add `-c credential.helper=` to those git commands. The keychain
+# helper blocks trying to store a credential for a host:port it has not seen
+# before, and the symptom is a git command that hangs with no output at all.
+#
+#   # and fetch it from node 2, which has never seen it before
+#   git clone http://x-access-token:local-token@localhost:14010/acme/app.git
+#
+#   # watch the cluster and the log
+#   curl -H 'Authorization: Bearer local-admin-token' localhost:14002/cluster
+#   curl -H 'Authorization: Bearer local-admin-token' localhost:14002/repositories/acme/app
+#
+# Ports are deliberately unusual: 9000 is MinIO's default and one of the most
+# contended ports on a developer machine, and 4000 is Phoenix's.
 name: micelio
 
 services:
@@ -16,13 +43,16 @@ services:
       MINIO_ROOT_USER: micelio
       MINIO_ROOT_PASSWORD: micelio-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # Deliberately not the port spec/support/stack.sh uses: the end-to-end
+      # stack runs its own MinIO, and two stacks sharing a port means one
+      # silently talks to the other's storage.
+      - "19020:9000"
+      - "19021:9001"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
       interval: 3s
       timeout: 3s
-      retries: 20
+      retries: 30
     volumes:
       - minio:/data
 
@@ -43,6 +73,13 @@ services:
     depends_on:
       createbucket:
         condition: service_completed_successfully
+    networks:
+      default:
+        aliases:
+          # Both nodes answer to this name, so one DNS lookup returns both
+          # addresses and the cluster forms itself. This is the same mechanism
+          # a Kubernetes headless Service provides.
+          - micelio-node
     environment: &micelio-env
       MICELIO_S3_BUCKET: micelio
       MICELIO_S3_ENDPOINT: http://minio:9000
@@ -54,21 +91,31 @@ services:
       MICELIO_AUTH_BACKEND: static
       MICELIO_AUTH_TOKENS: "local-token=acme:read,write"
       MICELIO_CLUSTER_STRATEGY: dns
-      MICELIO_DNS_QUERY: tasks.micelio
+      MICELIO_DNS_QUERY: micelio-node
       MICELIO_RELEASE_NAME: micelio
+      # Distributed Erlang's shared secret. Nodes with different cookies fail
+      # to cluster, silently.
       RELEASE_COOKIE: local-development-cookie
       MICELIO_DEFAULT_REPLICAS: "2"
+    healthcheck:
+      # Readiness, not liveness: it checks that object storage is reachable,
+      # because a node that cannot read the log cannot answer consistently.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4002/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
     ports:
-      - "4000:4000"
-      - "4002:4002"
+      - "14000:4000"
+      - "14002:4002"
 
   micelio-2:
     <<: *micelio
     environment:
       <<: *micelio-env
     ports:
-      - "4010:4000"
-      - "4012:4002"
+      - "14010:4000"
+      - "14012:4002"
 
 volumes:
   minio:

@@ -153,6 +153,62 @@ defmodule Micelio.HTTP.AdminRouter do
     end
   end
 
+  # ----------------------------------------------------------------------
+  # Authorization policy
+  #
+  # Policy is an object in the store, like everything else, so any node can
+  # read or change it and there is no service to be down.
+  # ----------------------------------------------------------------------
+
+  get "/policy/*account" do
+    account = Enum.join(conn.path_params["account"], "/")
+
+    case Micelio.Policy.get(account) do
+      {:ok, policy} -> send_json(conn, 200, Micelio.Policy.describe(policy))
+      {:error, reason} -> send_json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  put "/policy/*account" do
+    account = Enum.join(conn.path_params["account"], "/")
+    params = conn.body_params
+
+    with subject when is_binary(subject) <- params["subject"],
+         repositories when is_list(repositories) <- params["repositories"],
+         permissions when is_list(permissions) <- params["permissions"] do
+      opts =
+        [note: params["note"] || ""]
+        |> then(fn opts ->
+          case params["expires_at_ms"] do
+            nil -> opts
+            at -> Keyword.put(opts, :expires_at_ms, at)
+          end
+        end)
+
+      case Micelio.Policy.bind(account, subject, repositories, permissions, opts) do
+        {:ok, policy} -> send_json(conn, 200, Micelio.Policy.describe(policy))
+        {:error, reason} -> send_json(conn, 422, %{error: inspect(reason)})
+      end
+    else
+      _ -> send_json(conn, 422, %{error: "subject, repositories and permissions are required"})
+    end
+  end
+
+  delete "/policy/*account" do
+    account = Enum.join(conn.path_params["account"], "/")
+
+    case conn.query_params["subject"] || conn.body_params["subject"] do
+      nil ->
+        send_json(conn, 422, %{error: "subject is required"})
+
+      subject ->
+        case Micelio.Policy.unbind(account, subject) do
+          {:ok, policy} -> send_json(conn, 200, Micelio.Policy.describe(policy))
+          {:error, reason} -> send_json(conn, 422, %{error: inspect(reason)})
+        end
+    end
+  end
+
   post "/reap" do
     send_json(conn, 200, %{evicted: Micelio.Replica.Reaper.sweep()})
   end

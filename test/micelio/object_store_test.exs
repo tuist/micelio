@@ -5,7 +5,7 @@ defmodule Micelio.ObjectStoreTest do
   If they diverge, every WAL test is testing something production never does.
   """
 
-  use Micelio.Case, async: false
+  use Micelio.Case, async: true
 
   alias Micelio.ObjectStore
 

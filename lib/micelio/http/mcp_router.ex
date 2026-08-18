@@ -7,10 +7,13 @@ defmodule Micelio.HTTP.MCPRouter do
   which the specification permits: Micelio never initiates messages, so there
   is nothing a long-lived stream would carry.
 
-  No session state is kept. `Mcp-Session-Id` is echoed if a client sends one,
-  purely so client-side correlation works, but nothing on the server depends on
-  it. That is what lets an agent be load-balanced across pods freely — there is
-  no affinity to preserve, because there is nothing to be affine to.
+  No session state is kept, which since revision `2026-07-28` is what the
+  protocol itself assumes. `MCP-Protocol-Version` is read per request and
+  passed through to the dispatcher; `Mcp-Session-Id` is echoed if a legacy
+  client sends one, purely so its own correlation works, but nothing here
+  depends on it. That is what lets an agent be load-balanced across pods
+  freely: there is no affinity to preserve, because there is nothing to be
+  affine to.
   """
 
   @behaviour Plug
@@ -32,20 +35,9 @@ defmodule Micelio.HTTP.MCPRouter do
         AuthPlug.challenge(conn)
 
       principal ->
-        with :ok <- check_protocol_version(conn),
-             {:ok, body, conn} <- read_json(conn) do
-          respond(conn, body, principal)
-        else
-          {:error, :unsupported_version, version} ->
-            json(conn, 400, %{
-              jsonrpc: "2.0",
-              id: nil,
-              error: %{
-                code: Server.invalid_request_code(),
-                message: "unsupported MCP-Protocol-Version: #{version}",
-                data: %{supported: Server.supported_versions()}
-              }
-            })
+        case read_json(conn) do
+          {:ok, body, conn} ->
+            respond(conn, body, principal)
 
           {:error, conn, reason} ->
             json(conn, 400, %{
@@ -76,7 +68,7 @@ defmodule Micelio.HTTP.MCPRouter do
   defp respond(conn, messages, principal) when is_list(messages) do
     # A batch. Notifications produce nothing, so a batch of only notifications
     # correctly yields an empty acknowledgement rather than an empty array.
-    opts = [principal: principal, public_url: Micelio.Config.public_url(conn)]
+    opts = request_opts(conn, principal)
     replies = messages |> Enum.map(&Server.handle(&1, opts)) |> Enum.flat_map(&collect/1)
 
     case replies do
@@ -86,9 +78,7 @@ defmodule Micelio.HTTP.MCPRouter do
   end
 
   defp respond(conn, message, principal) when is_map(message) do
-    opts = [principal: principal, public_url: Micelio.Config.public_url(conn)]
-
-    case Server.handle(message, opts) do
+    case Server.handle(message, request_opts(conn, principal)) do
       {:reply, reply} -> json(conn, 200, reply)
       :noreply -> send_resp(conn, 202, "")
     end
@@ -105,13 +95,17 @@ defmodule Micelio.HTTP.MCPRouter do
   defp collect({:reply, reply}), do: [reply]
   defp collect(:noreply), do: []
 
-  defp check_protocol_version(conn) do
-    case get_req_header(conn, "mcp-protocol-version") do
-      [] ->
-        :ok
+  # On HTTP the version may be declared in a header as well as in each message's
+  # `_meta`. It is handed to the dispatcher rather than checked here, so an
+  # unsupported version comes back as the JSON-RPC error the specification
+  # defines — carrying the list of versions this server does support — instead
+  # of a bare HTTP status the client cannot act on.
+  defp request_opts(conn, principal) do
+    opts = [principal: principal, public_url: Micelio.Config.public_url(conn)]
 
-      [version | _] ->
-        if version in Server.supported_versions(), do: :ok, else: {:error, :unsupported_version, version}
+    case get_req_header(conn, "mcp-protocol-version") do
+      [version | _] -> Keyword.put(opts, :protocol_version, version)
+      [] -> opts
     end
   end
 

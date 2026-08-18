@@ -104,6 +104,7 @@ mise run e2e       # the end-to-end suite, against a live server and real S3
 | [Operations](docs/operations.md) | Configuration, metrics, failure modes, capacity |
 | [Kubernetes](docs/kubernetes.md) | Deploying, autoscaling, and authenticating pods |
 | [MCP](docs/mcp.md) | The agent-facing surface |
+| [Multi-tenancy](docs/multi-tenancy.md) | Authentication, authorization, and what isolation you actually get |
 
 ## Development
 

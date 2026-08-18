@@ -10,33 +10,45 @@ defmodule Micelio.Git do
 
   ## Process supervision
 
-  Git is invoked through MuonTrap rather than `System.cmd/3`, because a Git
-  server's failure mode is orphaned processes. A `upload-pack` serving a large
-  monorepo can run for minutes; if the BEAM process driving it dies, or the
-  client vanishes mid-clone, a bare port leaves the OS process alive holding
-  file descriptors and CPU. MuonTrap ties the child's lifetime to the owning
-  Erlang process, and on Linux can confine it to a cgroup, which is what makes
-  per-request CPU and memory ceilings possible.
+  A Git server's characteristic failure is orphaned processes: an `upload-pack`
+  serving a large monorepo runs for minutes, and if the client vanishes or the
+  handler dies, a stranded process keeps holding CPU and file descriptors.
 
-  Two shapes of invocation exist here, and they are supervised differently for
-  a concrete reason:
+  Three shapes of invocation exist here, supervised differently, and the
+  differences are forced rather than chosen:
 
-    * `run/3` runs plumbing that consumes an input and produces an output. It
-      goes through `MuonTrap.cmd/3`, which ties the OS process to the calling
-      Erlang process and, on Linux, can confine it to a cgroup. That is where
-      the protection matters most: `repack` is the one operation that can eat a
-      node's CPU, and it is the one most likely to be interrupted.
+    * `run/3` runs plumbing whose output we need. It uses `System.cmd/3`,
+      wrapped in `isolated/2` so that no port failure can kill the caller.
+
+    * `run_supervised/3` runs long, expensive commands whose output we do not
+      need — `repack` above all. These go through MuonTrap, which ties the OS
+      process to the owning Erlang process and, on Linux, can confine it to a
+      cgroup. This is where that protection is worth having: a repack can run
+      for minutes and saturate a core, and it is the invocation most likely to
+      be interrupted halfway.
 
     * `stream/3` runs the protocol endpoints, which need a live bidirectional
-      pipe. MuonTrap cannot serve these: without `--capture-output` it sends
-      the child's stdout to `/dev/null`, and it reads its own stdin as a
-      flow-control channel rather than forwarding it. So these use a plain
-      port, and `terminate/1` reproduces the part of MuonTrap's guarantee that
-      actually matters here by signalling the process group on abort.
+      pipe. `terminate/1` reproduces the part of MuonTrap's guarantee that
+      matters here by signalling the process on abort.
 
-      In practice `git` also cooperates: it writes to stdout continuously, so a
-      closed port gives it `EPIPE` and it exits on its own. The explicit signal
-      covers the case where it is blocked somewhere else.
+  ### Why MuonTrap is not used everywhere
+
+  It cannot be, in either direction.
+
+  For the protocol endpoints it is unusable: without `--capture-output` its
+  wrapper sends the child's stdout to `/dev/null`, and it consumes its own
+  stdin as a flow-control channel instead of forwarding it, so there is no way
+  to both write a request and read a response.
+
+  For commands whose output we need it is unsafe on Linux. `MuonTrap.cmd/3`
+  acknowledges consumed bytes by writing back to the port, and when the child
+  has already exited that write fails. MuonTrap guards it with `rescue`, which
+  catches the `ArgumentError` case but not the `:epipe` case — and `:epipe`
+  arrives as an exit signal, which no `try/catch` in the calling process can
+  stop. In a container this is not a rare race but the normal outcome: a
+  measured thirty out of thirty `git --version` invocations took the caller
+  down with them. The same call producing no output is completely reliable,
+  which is exactly the shape `run_supervised/3` is restricted to.
 
   Every invocation runs with system and global configuration disabled, so a
   node behaves identically regardless of what is in the operator's
@@ -575,11 +587,7 @@ defmodule Micelio.Git do
     args = if path, do: ["--git-dir", path | args], else: args
     started = System.monotonic_time(:microsecond)
 
-    {output, status} =
-      case Keyword.get(opts, :stdin) do
-        nil -> MuonTrap.cmd(executable(), args, muontrap_opts(opts))
-        stdin -> run_with_stdin(args, stdin, opts)
-      end
+    {output, status} = isolated(fn -> invoke(args, opts) end)
 
     duration = System.monotonic_time(:microsecond) - started
 
@@ -596,6 +604,92 @@ defmodule Micelio.Git do
     end
   end
 
+  defp invoke(args, opts) do
+    case Keyword.get(opts, :stdin) do
+      nil -> System.cmd(executable(), args, cmd_opts(opts))
+      stdin -> run_with_stdin(args, stdin, opts)
+    end
+  end
+
+  @doc """
+  Run a long, expensive command whose output is not needed.
+
+  Goes through MuonTrap, so the OS process dies with its owner and can be
+  confined to a cgroup. Output is deliberately discarded — see the note above
+  on why capturing it through MuonTrap is unsafe — so on failure the command is
+  re-run through `run/3` purely to obtain a diagnostic.
+  """
+  @spec run_supervised(path(), [String.t()], keyword()) :: {:ok, String.t()} | {:error, term()}
+  def run_supervised(path, args, opts \\ []) do
+    full = ["--git-dir", path | args]
+    started = System.monotonic_time(:microsecond)
+
+    {_output, status} =
+      isolated(fn ->
+        MuonTrap.cmd(executable(), full, supervised_opts(opts))
+      end)
+
+    :telemetry.execute(
+      [:micelio, :git, :command],
+      %{duration_us: System.monotonic_time(:microsecond) - started, bytes: 0},
+      %{
+        subcommand: subcommand(full),
+        status: status
+      }
+    )
+
+    if status == 0 do
+      {:ok, ""}
+    else
+      # Re-run to find out why. Rare enough that the cost does not matter, and
+      # a repack that fails without an explanation is unactionable.
+      case run(path, args, opts) do
+        {:ok, output} -> {:ok, output}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  # stderr is deliberately not merged: any output at all would exercise
+  # MuonTrap's acknowledgement path, which is the unsafe one.
+  defp supervised_opts(opts) do
+    base = [env: env(opts), delay_to_sigkill: 1_000]
+    base = if timeout = opts[:timeout], do: Keyword.put(base, :timeout, timeout), else: base
+
+    case Keyword.get(opts, :cgroup) do
+      nil -> base
+      {controllers, path} -> base ++ [cgroup_controllers: controllers, cgroup_path: path]
+    end
+  end
+
+  # A port failure — MuonTrap acknowledging bytes on a pipe whose child has
+  # already exited, most notably — arrives as an exit signal, which no
+  # `try/catch` in the calling process can stop. Running the command in a
+  # monitored process turns it into a value we can act on instead of a dead
+  # request handler.
+  #
+  # The single retry is safe because every command run this way is idempotent.
+  defp isolated(fun, attempt \\ 1) do
+    parent = self()
+    tag = make_ref()
+
+    {pid, monitor} = spawn_monitor(fn -> send(parent, {tag, fun.()}) end)
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        if attempt < 2 do
+          Logger.debug("git invocation died with #{inspect(reason)}; retrying once")
+          isolated(fun, attempt + 1)
+        else
+          {"git invocation failed: #{inspect(reason)}", 125}
+        end
+    end
+  end
+
   # Neither System.cmd/3 nor MuonTrap.cmd/3 can write to stdin, and a port has
   # no way to half-close it, which matters because `update-ref --stdin` and
   # `hash-object --stdin` only act on EOF. Handing the payload to the shell as
@@ -607,12 +701,10 @@ defmodule Micelio.Git do
     File.write!(tmp, stdin)
 
     try do
-      MuonTrap.cmd(
+      System.cmd(
         "/bin/sh",
         ["-c", ~S(exec "$0" "$@" < "$MICELIO_GIT_STDIN"), executable() | args],
-        muontrap_opts(
-          Keyword.update(opts, :env, [{"MICELIO_GIT_STDIN", tmp}], &[{"MICELIO_GIT_STDIN", tmp} | &1])
-        )
+        cmd_opts(Keyword.update(opts, :env, [{"MICELIO_GIT_STDIN", tmp}], &[{"MICELIO_GIT_STDIN", tmp} | &1]))
       )
     after
       File.rm(tmp)
@@ -679,10 +771,9 @@ defmodule Micelio.Git do
     _, _ -> :ok
   end
 
-  defp muontrap_opts(opts) do
-    base = [stderr_to_stdout: true, env: env(opts), delay_to_sigkill: 1_000]
-    base = if cd = opts[:cd], do: Keyword.put(base, :cd, cd), else: base
-    if timeout = opts[:timeout], do: Keyword.put(base, :timeout, timeout), else: base
+  defp cmd_opts(opts) do
+    base = [stderr_to_stdout: true, env: env(opts)]
+    if cd = opts[:cd], do: Keyword.put(base, :cd, cd), else: base
   end
 
   defp env(opts) do

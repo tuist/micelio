@@ -4,7 +4,7 @@ defmodule Micelio.ReplicaTest do
   converges on the log, from any starting state, without help.
   """
 
-  use Micelio.Case, async: false
+  use Micelio.Case, async: true
 
   alias Micelio.Control
   alias Micelio.Git
@@ -13,11 +13,9 @@ defmodule Micelio.ReplicaTest do
   alias Micelio.WAL
   alias Micelio.WAL.Entry
 
-  @repo "acme/app"
-
-  setup do
+  setup %{repo: repo} do
     start_replica_runtime()
-    {:ok, _} = Control.create_repository(@repo)
+    {:ok, _} = Control.create_repository(repo)
     # One source repository per test, so successive commits build on each other
     # the way a real client's would.
     {:ok, source: fixture_repository()}
@@ -26,26 +24,26 @@ defmodule Micelio.ReplicaTest do
   # Commit in the source, move the objects into the replica the way
   # receive-pack would, then commit the reference transaction through the log.
   # This is the ingest path with the Git protocol taken out of the middle.
-  defp push_commit(source, content) do
+  defp push_commit(repo, source, content) do
     File.write!(Path.join(source, "#{content}.txt"), content <> "\n")
     git(["add", "."], source)
     git(["commit", "-qm", "add #{content}"], source)
     new = oid(source)
 
-    {:ok, view} = Replica.ensure_fresh(@repo)
-    old = current_ref()
+    {:ok, view} = Replica.ensure_fresh(repo)
+    old = current_ref(repo)
 
     {_, 0} = git(["push", "--quiet", "--force", view.path, "HEAD:refs/heads/main"], source)
     {_, 0} = git(["repack", "-a", "-d", "-q"], view.path)
 
     descriptors =
       Enum.map(Git.packs(view.path), fn pack ->
-        {:ok, descriptor} = WAL.put_pack(@repo, pack)
+        {:ok, descriptor} = WAL.put_pack(repo, pack)
         descriptor
       end)
 
     {:ok, result} =
-      WAL.append(@repo, fn _index ->
+      WAL.append(repo, fn _index ->
         {:ok,
          Entry.new(
            type: :ENTRY_TYPE_PUSH,
@@ -54,31 +52,31 @@ defmodule Micelio.ReplicaTest do
          )}
       end)
 
-    Replica.record_local_push(@repo, result.epoch, result.seq)
+    Replica.record_local_push(repo, result.epoch, result.seq)
     %{oid: new, seq: result.seq}
   end
 
-  defp current_ref do
-    {:ok, index, _} = WAL.fetch(@repo)
+  defp current_ref(repo) do
+    {:ok, index, _} = WAL.fetch(repo)
     Micelio.WAL.Index.ref(index, "refs/heads/main")
   end
 
   describe "materialization" do
-    test "builds a repository from the log when nothing is on disk", %{source: source} do
-      %{oid: oid} = push_commit(source, "one")
+    test "builds a repository from the log when nothing is on disk", %{source: source, repo: repo} do
+      %{oid: oid} = push_commit(repo, source, "one")
 
       # Throw the local copy away entirely. This is the eviction case, the
       # crashed-node case and the new-node case, all at once.
-      Replica.evict(@repo)
-      refute File.dir?(Replica.path(@repo))
+      Replica.evict(repo)
+      refute File.dir?(Replica.path(repo))
 
-      assert {:ok, view} = Replica.ensure_fresh(@repo)
+      assert {:ok, view} = Replica.ensure_fresh(repo)
       assert {:ok, refs} = Git.refs(view.path)
       assert refs["refs/heads/main"] == oid
     end
 
-    test "a repository that was never pushed to materializes empty" do
-      assert {:ok, view} = Replica.ensure_fresh(@repo)
+    test "a repository that was never pushed to materializes empty", %{repo: repo} do
+      assert {:ok, view} = Replica.ensure_fresh(repo)
       assert {:ok, refs} = Git.refs(view.path)
       assert refs == %{}
       assert {:ok, "refs/heads/main"} = Git.head(view.path)
@@ -90,41 +88,41 @@ defmodule Micelio.ReplicaTest do
   end
 
   describe "convergence" do
-    test "catches up on entries written by another node", %{source: source} do
-      %{oid: first} = push_commit(source, "one")
-      {:ok, view} = Replica.ensure_fresh(@repo)
+    test "catches up on entries written by another node", %{source: source, repo: repo} do
+      %{oid: first} = push_commit(repo, source, "one")
+      {:ok, view} = Replica.ensure_fresh(repo)
       assert {:ok, %{"refs/heads/main" => ^first}} = Git.refs(view.path)
 
-      %{oid: second} = push_commit(source, "two")
+      %{oid: second} = push_commit(repo, source, "two")
 
       # Discard the local copy so the replica has to rebuild from the log,
       # which is the same path a node takes when it has never seen the
       # repository before.
-      Replica.evict(@repo)
+      Replica.evict(repo)
 
-      assert {:ok, view} = Replica.ensure_fresh(@repo)
+      assert {:ok, view} = Replica.ensure_fresh(repo)
       assert {:ok, refs} = Git.refs(view.path)
       assert refs["refs/heads/main"] == second
       refute second == first
     end
 
-    test "converging is idempotent", %{source: source} do
-      push_commit(source, "one")
+    test "converging is idempotent", %{source: source, repo: repo} do
+      push_commit(repo, source, "one")
 
-      assert {:ok, a} = Replica.ensure_fresh(@repo)
-      assert {:ok, b} = Replica.ensure_fresh(@repo)
-      assert {:ok, c} = Replica.ensure_fresh(@repo)
+      assert {:ok, a} = Replica.ensure_fresh(repo)
+      assert {:ok, b} = Replica.ensure_fresh(repo)
+      assert {:ok, c} = Replica.ensure_fresh(repo)
 
       assert a.seq == b.seq and b.seq == c.seq
       assert a.epoch == b.epoch
     end
 
-    test "a deleted ref is removed from the replica", %{source: source} do
-      %{oid: first} = push_commit(source, "one")
-      {:ok, _} = Replica.ensure_fresh(@repo)
+    test "a deleted ref is removed from the replica", %{source: source, repo: repo} do
+      %{oid: first} = push_commit(repo, source, "one")
+      {:ok, _} = Replica.ensure_fresh(repo)
 
       {:ok, result} =
-        WAL.append(@repo, fn _ ->
+        WAL.append(repo, fn _ ->
           {:ok,
            Entry.new(
              type: :ENTRY_TYPE_PUSH,
@@ -132,24 +130,24 @@ defmodule Micelio.ReplicaTest do
            )}
         end)
 
-      Replica.record_local_push(@repo, result.epoch, result.seq)
+      Replica.record_local_push(repo, result.epoch, result.seq)
 
-      assert {:ok, view} = Replica.ensure_fresh(@repo)
+      assert {:ok, view} = Replica.ensure_fresh(repo)
       assert {:ok, refs} = Git.refs(view.path)
       refute Map.has_key?(refs, "refs/heads/main")
     end
   end
 
   describe "staleness budget" do
-    test "zero means every read revalidates against the log", %{source: source} do
-      %{oid: first} = push_commit(source, "one")
-      {:ok, _} = Replica.ensure_fresh(@repo, staleness_budget_ms: 0)
-      {:ok, index, _} = WAL.fetch(@repo)
+    test "zero means every read revalidates against the log", %{source: source, repo: repo} do
+      %{oid: first} = push_commit(repo, source, "one")
+      {:ok, _} = Replica.ensure_fresh(repo, staleness_budget_ms: 0)
+      {:ok, index, _} = WAL.fetch(repo)
 
       # A change made behind the replica's back, with no hint and no local
       # write, must still be visible on the very next read.
       {:ok, _} =
-        WAL.append(@repo, fn _ ->
+        WAL.append(repo, fn _ ->
           {:ok,
            Entry.new(
              type: :ENTRY_TYPE_PUSH,
@@ -157,7 +155,7 @@ defmodule Micelio.ReplicaTest do
            )}
         end)
 
-      assert {:ok, view} = Replica.ensure_fresh(@repo, staleness_budget_ms: 0)
+      assert {:ok, view} = Replica.ensure_fresh(repo, staleness_budget_ms: 0)
       assert view.seq == index.seq + 1
 
       assert {:ok, refs} = Git.refs(view.path)
@@ -166,15 +164,15 @@ defmodule Micelio.ReplicaTest do
   end
 
   describe "integrity" do
-    test "refuses to point a ref at an object it does not have", %{source: source} do
-      push_commit(source, "one")
+    test "refuses to point a ref at an object it does not have", %{source: source, repo: repo} do
+      push_commit(repo, source, "one")
 
       # A log entry naming an object no pack provides is corruption, not a
       # state to converge on. Failing loudly is the correct outcome: the
       # alternative is a replica that silently advertises a ref clients cannot
       # fetch.
       {:ok, _} =
-        WAL.append(@repo, fn _ ->
+        WAL.append(repo, fn _ ->
           {:ok,
            Entry.new(
              type: :ENTRY_TYPE_PUSH,
@@ -182,18 +180,18 @@ defmodule Micelio.ReplicaTest do
            )}
         end)
 
-      assert {:error, {:git, _, message}} = Replica.ensure_fresh(@repo)
+      assert {:error, {:git, _, message}} = Replica.ensure_fresh(repo)
       assert message =~ "nonexistent object"
     end
   end
 
   describe "info/1" do
-    test "reports log position and local state", %{source: source} do
-      push_commit(source, "one")
-      {:ok, _} = Replica.ensure_fresh(@repo)
+    test "reports log position and local state", %{source: source, repo: repo} do
+      push_commit(repo, source, "one")
+      {:ok, _} = Replica.ensure_fresh(repo)
 
-      assert {:ok, info} = Replica.info(@repo)
-      assert info.repo_id == @repo
+      assert {:ok, info} = Replica.info(repo)
+      assert info.repo_id == repo
       assert info.behind == 0
       assert info.materialized
       assert info.objects > 0
@@ -204,40 +202,40 @@ defmodule Micelio.ReplicaTest do
     end
   end
 
-  test "evict/1 removes the repository from disk but not from the log", %{source: source} do
-    push_commit(source, "one")
-    {:ok, view} = Replica.ensure_fresh(@repo)
+  test "evict/1 removes the repository from disk but not from the log", %{source: source, repo: repo} do
+    push_commit(repo, source, "one")
+    {:ok, view} = Replica.ensure_fresh(repo)
     assert File.dir?(view.path)
 
-    assert :ok = Replica.evict(@repo)
+    assert :ok = Replica.evict(repo)
     refute File.dir?(view.path)
 
     # Still fully described by the log, so it comes straight back.
-    assert {:ok, restored} = Replica.ensure_fresh(@repo)
+    assert {:ok, restored} = Replica.ensure_fresh(repo)
     assert {:ok, refs} = Git.refs(restored.path)
     assert map_size(refs) == 1
   end
 
-  test "resident/0 lists repositories held on this node" do
-    {:ok, _} = Replica.ensure_fresh(@repo)
-    assert @repo in Replica.resident()
+  test "resident/0 lists repositories held on this node", %{repo: repo} do
+    {:ok, _} = Replica.ensure_fresh(repo)
+    assert repo in Replica.resident()
   end
 
   describe "ingest" do
-    test "rejects a push whose old value does not match the log", %{source: source} do
-      %{oid: first} = push_commit(source, "one")
+    test "rejects a push whose old value does not match the log", %{source: source, repo: repo} do
+      %{oid: first} = push_commit(repo, source, "one")
 
       stale = String.duplicate("f", 40)
       command = %V1.RefCommand{ref: "refs/heads/main", old_oid: stale, new_oid: String.duplicate("e", 40)}
 
-      assert {:error, message} = Ingest.commit(@repo, commands: [command])
+      assert {:error, message} = Ingest.commit(repo, commands: [command])
       assert message =~ "has moved since you last fetched"
       assert message =~ String.slice(first, 0, 12)
     end
 
-    test "accepts a push whose old value matches", %{source: source} do
-      %{oid: first} = push_commit(source, "one")
-      {:ok, view} = Replica.ensure_fresh(@repo)
+    test "accepts a push whose old value matches", %{source: source, repo: repo} do
+      %{oid: first} = push_commit(repo, source, "one")
+      {:ok, view} = Replica.ensure_fresh(repo)
 
       # Build a real follow-up commit inside the replica.
       {:ok, blob} = Git.write_blob(view.path, "next\n")
@@ -245,10 +243,10 @@ defmodule Micelio.ReplicaTest do
       {:ok, commit} = Git.commit_tree(view.path, tree, [first], "next\n", %{name: "T", email: "t@e"})
 
       command = %V1.RefCommand{ref: "refs/heads/main", old_oid: first, new_oid: commit}
-      assert {:ok, result} = Ingest.commit(@repo, commands: [command])
+      assert {:ok, result} = Ingest.commit(repo, commands: [command])
       assert result.seq > 0
 
-      {:ok, index, _} = WAL.fetch(@repo)
+      {:ok, index, _} = WAL.fetch(repo)
       assert Micelio.WAL.Index.ref(index, "refs/heads/main") == commit
     end
   end

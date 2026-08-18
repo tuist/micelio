@@ -64,6 +64,10 @@ defmodule Micelio.MixProject do
       {:opentelemetry_bandit, "~> 0.2"},
       {:opentelemetry_telemetry, "~> 1.1"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      # Used sparingly: the suite runs against real git and a real object store
+      # wherever it can, and reaches for a stub only for the paths that cannot
+      # be provoked otherwise (an unreachable issuer, a storage failure).
+      {:mimic, "~> 1.7", only: :test},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]

@@ -30,8 +30,14 @@ defmodule Micelio.Application do
         object_store_children(),
         {Registry, keys: :unique, name: Micelio.ReplicaRegistry},
         {DynamicSupervisor, strategy: :one_for_one, name: Micelio.ReplicaSupervisor},
+        # One writer per repository, batching its index updates.
+        {Registry, keys: :unique, name: Micelio.WriterRegistry},
+        {DynamicSupervisor, strategy: :one_for_one, name: Micelio.WriterSupervisor},
         auth_children(),
         {Micelio.Auth.JWKS, []},
+        # Authorization policy lives in object storage like everything else;
+        # this is only its per-node cache.
+        {Micelio.Policy, []},
         maintenance_children(),
         listener_children(),
         prom_ex_children(),
@@ -97,7 +103,13 @@ defmodule Micelio.Application do
             read_timeout: :timer.minutes(30),
             transport_options: [backlog: 1024]
           ],
-          http_options: [log_protocol_errors: false]
+          # Compression is off deliberately. Bandit will gzip a response when the
+          # client offers to accept it, and every git client does — but the Git
+          # protocol carries packfiles, which are already compressed, so this
+          # spends CPU to make responses slightly larger. Worse, git parses the
+          # reference advertisement itself and stalls when it arrives encoded,
+          # which presents as a push that hangs rather than an error.
+          http_options: [log_protocol_errors: false, compress: false]
         ),
 
         # Loopback only: the pre-receive hook's callback. This endpoint can

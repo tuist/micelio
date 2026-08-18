@@ -5,11 +5,9 @@ Describe 'Git smart HTTP'
       repo=$(new_repo)
       admin "$NODE1_ADMIN_URL" POST /repositories -d "{\"repository\":\"$repo\"}" >/dev/null
 
-      # credential.helper is emptied deliberately. Without it, a developer's
-      # keychain will happily supply credentials cached by an earlier passing
-      # test, and this assertion silently stops testing anything.
-      When run env GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
-        clone -q "${NODE1_URL}/${repo}.git" "$(mktemp -d)/clone"
+      # The suite runs with its own gitconfig and no credential helper, so this
+      # cannot accidentally succeed on credentials an earlier test cached.
+      When run git clone -q "${NODE1_URL}/${repo}.git" "$(mktemp -d)/clone"
       The status should not equal 0
       The stderr should match pattern "*Username*"
     End
@@ -96,7 +94,7 @@ Describe 'Git smart HTTP'
         echo one > f.txt && git add . && git commit -qm one && git push -q '$url' main
 
         cd '$b'
-        git config user.email e2e@example.com && git config user.name E2E
+true
         echo two > f.txt && git add . && git commit -qm two
         git push '$url' main 2>&1
       "

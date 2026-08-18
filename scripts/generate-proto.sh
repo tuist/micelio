@@ -23,12 +23,19 @@ export PATH="$escripts:$PATH"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-protoc --proto_path=priv/proto --elixir_out="$scratch" priv/proto/micelio/wal/v1/wal.proto
+generate() {
+  proto=$1
+  out=$2
+  work="$scratch/$(basename "$out" .pb.ex)"
 
-mkdir -p lib/micelio/wal/v1
-find "$scratch" -name '*.pb.ex' -exec cp {} lib/micelio/wal/v1/wal.pb.ex \;
+  mkdir -p "$work" "$(dirname "$out")"
+  protoc --proto_path=priv/proto --elixir_out="$work" "$proto"
+  find "$work" -name '*.pb.ex' -exec cp {} "$out" \;
+  mix format "$out"
 
-mix format lib/micelio/wal/v1/wal.pb.ex
+  echo "Generated $out:"
+  grep '^defmodule' "$out" | sed 's/^/  /'
+}
 
-echo "Generated lib/micelio/wal/v1/wal.pb.ex:"
-grep '^defmodule' lib/micelio/wal/v1/wal.pb.ex | sed 's/^/  /'
+generate priv/proto/micelio/wal/v1/wal.proto lib/micelio/wal/v1/wal.pb.ex
+generate priv/proto/micelio/policy/v1/policy.proto lib/micelio/policy/v1/policy.pb.ex

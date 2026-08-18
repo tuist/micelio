@@ -106,7 +106,8 @@ replicas are doing real catch-up work on the read path, and latency will follow.
 
 | Metric | Question it answers |
 |---|---|
-| `micelio_wal_cas_retry_count` | Is there write contention? A few are normal on a busy repository; many mean it is a write hotspot bounded by object store latency |
+| `micelio_wal_cas_retry_count` | Is there write contention the writer could not absorb? A few are normal; many mean pushes are arriving at several nodes at once, so routing to the preferred writer is not taking effect |
+| `micelio_wal_append_batch_size` | How well group commit is working. Rising with load is the system doing its job |
 | `micelio_replica_sync_entries_behind` | How far behind is this node? Persistent non-zero means hints are not arriving, or the store is slow |
 | `micelio_git_requests_in_flight` | Should we scale? See below |
 | `micelio_push_rejected_count{reason}` | `non_fast_forward` is users; `storage` and `contention` are yours |
@@ -164,6 +165,10 @@ fail, because the node cannot confirm it is current and would rather refuse than
 lie. Writes fail. `/ready` goes red and the node leaves rotation. This is a hard
 dependency by design.
 
+**A git command hangs with no output on macOS.** Not Micelio. The `osxkeychain`
+credential helper blocks storing a credential for a host and port it has not
+seen before. Add `-c credential.helper=` to confirm, then approve it once.
+
 **A push is rejected with "has moved since you last fetched".** Working as
 intended: another push landed first, possibly on another node. The client should
 fetch and retry. If it happens constantly on one repository, that repository is
@@ -183,9 +188,12 @@ the working set, so this means the working set grew.
 ## Capacity
 
 - **Read throughput** scales linearly with replicas. Add pods.
-- **Per-repository write throughput** is bounded by object store latency: each
-  push is at least one conditional GET and one conditional PUT. S3 Express One
-  Zone materially outperforms S3 Standard here.
+- **Per-repository write throughput** is one conditional GET and one
+  conditional PUT *per batch*, not per push: concurrent pushes to a repository
+  are grouped by its writer (see [architecture](architecture.md#write-throughput)).
+  A repository under sustained write load therefore scales with batch size
+  rather than degrading with concurrency. S3 Express One Zone materially
+  outperforms S3 Standard here.
 - **Cluster-wide write throughput** scales with the number of distinct
   repositories, since each has its own independent CAS chain.
 - **Disk** should hold the working set, not the corpus.

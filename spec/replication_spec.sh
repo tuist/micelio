@@ -130,10 +130,6 @@ Describe 'Replication'
       git clone -q '$(git_url "$NODE1_URL" "$repo")' \"\$a\"
       git clone -q '$(git_url "$NODE2_URL" "$repo")' \"\$b\"
 
-      for d in \"\$a\" \"\$b\"; do
-        (cd \"\$d\" && git config user.email e2e@example.com && git config user.name E2E)
-      done
-
       (cd \"\$a\" && echo a > x.txt && git add . && git commit -qm a)
       (cd \"\$b\" && echo b > x.txt && git add . && git commit -qm b)
 

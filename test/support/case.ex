@@ -1,10 +1,28 @@
 defmodule Micelio.Case do
   @moduledoc """
-  Test case that gives each test its own object store and data directory.
+  A test case with its own object store, data directory and repository
+  namespace.
 
-  Isolation is per-test rather than per-run because almost everything here is
-  about what happens when two writers race, and a shared store would make those
-  tests order-dependent in exactly the way that hides real bugs.
+  Isolation is per-test rather than per-run because most of what is interesting
+  here is what happens when two writers race, and a shared store would make
+  those tests order-dependent in exactly the way that hides real bugs.
+
+  Everything here runs `async: true`. That is not free — it required the
+  configuration a node reads to be overridable per process (see
+  `Micelio.Config`) rather than only globally — but a suite that cannot run in
+  parallel is a suite that quietly grows shared state, which is precisely the
+  class of bug this project cannot afford.
+
+  Three things make it safe:
+
+    * **Configuration is process-local.** Each test points at its own object
+      store and data directory through `Micelio.Config.put_overrides/1`, and
+      `Micelio.Replica` carries those overrides into the processes it starts.
+    * **Repository ids are unique per test.** The replica registry is global,
+      so two tests using `acme/app` would share a process. `repo/1` returns an
+      id nothing else will use.
+    * **Cleanup is scoped.** Only the replicas this test started are stopped,
+      never every replica on the node.
   """
 
   use ExUnit.CaseTemplate
@@ -24,46 +42,41 @@ defmodule Micelio.Case do
     File.mkdir_p!(store)
     File.mkdir_p!(data)
 
-    previous = %{
-      object_store: Application.get_env(:micelio, :object_store),
-      data_dir: Application.get_env(:micelio, :data_dir),
-      node_id: Application.get_env(:micelio, :node_id)
-    }
+    Micelio.Config.put_overrides(%{
+      object_store: {Micelio.ObjectStore.Filesystem, root: store},
+      data_dir: data,
+      node_id: "test-#{id}"
+    })
 
-    Application.put_env(:micelio, :object_store, {Micelio.ObjectStore.Filesystem, root: store})
-    Application.put_env(:micelio, :data_dir, data)
-    Application.put_env(:micelio, :node_id, "test-#{id}")
-
-    # The application already runs the lock in the test environment; only start
-    # one when running against a bare VM.
+    # The application supplies the lock in the test environment; this covers
+    # running against a bare VM.
     if is_nil(Process.whereis(Micelio.ObjectStore.Filesystem.Lock)) do
       start_supervised!(Micelio.ObjectStore.Filesystem.Lock)
     end
 
-    # Replica processes cache the path they were started with, and the registry
-    # is application-wide, so a survivor from a previous test would serve the
-    # wrong directory. Clear them before and after each test.
-    stop_replicas()
+    namespace = "test#{id}"
 
     on_exit(fn ->
-      stop_replicas()
-
-      Enum.each(previous, fn {key, value} ->
-        if value, do: Application.put_env(:micelio, key, value), else: Application.delete_env(:micelio, key)
-      end)
-
+      stop_replicas(namespace)
       File.rm_rf(root)
     end)
 
-    {:ok, root: root, store: store, data: data}
+    {:ok, root: root, store: store, data: data, namespace: namespace, repo: "#{namespace}/app"}
   end
+
+  @doc """
+  A repository id unique to this test.
+
+  The replica registry is global, so two concurrent tests using the same id
+  would share a process and a directory.
+  """
+  def repo(%{namespace: namespace}, name \\ "app"), do: "#{namespace}/#{name}"
 
   @doc """
   Ensure the replica runtime is available.
 
-  The application supplies it when the suite runs under `mix test`; this starts
-  the missing pieces when running against a bare VM, and is idempotent either
-  way.
+  The application supplies it under `mix test`; this starts the missing pieces
+  when running against a bare VM, and is idempotent either way.
   """
   def start_replica_runtime do
     ensure_started({Registry, keys: :unique, name: Micelio.ReplicaRegistry}, Micelio.ReplicaRegistry)
@@ -71,6 +84,13 @@ defmodule Micelio.Case do
     ensure_started(
       {DynamicSupervisor, strategy: :one_for_one, name: Micelio.ReplicaSupervisor},
       Micelio.ReplicaSupervisor
+    )
+
+    ensure_started({Registry, keys: :unique, name: Micelio.WriterRegistry}, Micelio.WriterRegistry)
+
+    ensure_started(
+      {DynamicSupervisor, strategy: :one_for_one, name: Micelio.WriterSupervisor},
+      Micelio.WriterSupervisor
     )
 
     ensure_started({Task.Supervisor, name: Micelio.TaskSupervisor}, Micelio.TaskSupervisor)
@@ -81,19 +101,20 @@ defmodule Micelio.Case do
     if is_nil(Process.whereis(name)), do: ExUnit.Callbacks.start_supervised!(spec)
   end
 
-  @doc "Terminate every resident replica process."
-  def stop_replicas do
-    case Process.whereis(Micelio.ReplicaSupervisor) do
-      nil ->
-        :ok
+  @doc """
+  Stop the replicas belonging to one namespace.
 
-      supervisor ->
-        for {_, pid, _, _} <- DynamicSupervisor.which_children(supervisor) do
-          DynamicSupervisor.terminate_child(supervisor, pid)
-        end
-
-        :ok
+  Scoped deliberately: terminating every replica on the node would reach into
+  whatever else is running concurrently.
+  """
+  def stop_replicas(namespace) do
+    if Process.whereis(Micelio.ReplicaRegistry) do
+      for repo_id <- Micelio.Replica.resident(), String.starts_with?(repo_id, namespace <> "/") do
+        Micelio.Replica.evict(repo_id)
+      end
     end
+
+    :ok
   end
 
   @doc "Build a scratch git repository with one commit and return its path."

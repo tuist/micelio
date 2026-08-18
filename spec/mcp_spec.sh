@@ -21,7 +21,26 @@ Describe 'MCP'
   End
 
   Describe 'protocol'
-    It 'initializes'
+    It 'answers server/discover without any handshake'
+      # The stateless revision: the first request a client makes can be any
+      # request, and nothing is remembered between them.
+      When run bash -c "mcp '$NODE1_URL' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"server/discover\",\"params\":{}}'"
+      The status should equal 0
+      The output should include '"supportedVersions"'
+      The output should include "2026-07-28"
+      The output should include "micelio"
+    End
+
+    It 'refuses a protocol version it does not implement, and says which it does'
+      When run bash -c "mcp '$NODE1_URL' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"1900-01-01\"}}}'"
+      The status should equal 0
+      The output should include "-32022"
+      The output should include '"supported"'
+    End
+
+    It 'still answers the legacy handshake'
+      # Legacy clients have no fall-forward mechanism, so dropping this would
+      # simply break them.
       When run bash -c "mcp '$NODE1_URL' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}'"
       The status should equal 0
       The output should include '"serverInfo"'

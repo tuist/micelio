@@ -123,11 +123,13 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "git-cliff"
+      # By name, not everything: build-push-action also uploads a build-record
+      # artifact, and pulling the whole set in makes this job fail for reasons
+      # that have nothing to do with the release.
       - uses: actions/download-artifact@v4
         with:
+          name: chart
           path: dist
-      - name: Flatten artifacts
-        run: find dist -type f -exec mv {} dist/ \; || true
       - name: Generate release notes
         run: |
           mise run release:notes --version "${{ needs.detect.outputs.next-version }}" > release-notes.md

@@ -34,6 +34,7 @@ defmodule Micelio.Ingest do
 
   alias Micelio.Cluster
   alias Micelio.Git
+  alias Micelio.Ingest.Writer
   alias Micelio.Replica
   alias Micelio.WAL
   alias Micelio.WAL.Entry
@@ -99,21 +100,28 @@ defmodule Micelio.Ingest do
     end
   end
 
+  # Uploading the entry and installing it in the index are separate steps on
+  # purpose. The upload is content-addressed and contention-free, so it happens
+  # on whichever node received the push; only the index update is funnelled
+  # through the repository's writer, where concurrent pushes become one batch
+  # instead of a queue of losers retrying. See `Micelio.Ingest.Writer`.
   defp append(repo_id, commands, packs, actor) do
-    WAL.append(repo_id, fn index ->
-      # Re-checked on every compare-and-swap attempt, against the index we just
-      # read. A push that races another one is validated against the winner's
-      # result rather than against whatever was true when we started.
-      with :ok <- check_fast_forward(index, commands) do
-        {:ok,
-         Entry.new(
-           type: :ENTRY_TYPE_PUSH,
-           commands: commands,
-           packs: packs,
-           actor: %{actor | node: Micelio.Config.node_id()}
-         )}
-      end
-    end)
+    entry =
+      Entry.new(
+        type: :ENTRY_TYPE_PUSH,
+        commands: commands,
+        packs: packs,
+        actor: %{actor | node: Micelio.Config.node_id()}
+      )
+
+    # Re-run on every compare-and-swap attempt, against the index that actually
+    # won, so a push racing another is judged against the winner's result and
+    # not against whatever was true when it started.
+    validate = fn index -> check_fast_forward(index, commands) end
+
+    with {:ok, prepared} <- WAL.prepare(repo_id, entry, validate) do
+      Writer.commit(repo_id, prepared)
+    end
   end
 
   defp check_fast_forward(index, commands) do
@@ -176,10 +184,10 @@ defmodule Micelio.Ingest do
   """
   @spec set_head(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_head(repo_id, target) do
-    with {:ok, result} <-
-           WAL.append(repo_id, fn _index ->
-             {:ok, Entry.new(type: :ENTRY_TYPE_SYMREF, symrefs: %{"HEAD" => target})}
-           end) do
+    entry = Entry.new(type: :ENTRY_TYPE_SYMREF, symrefs: %{"HEAD" => target})
+
+    with {:ok, prepared} <- WAL.prepare(repo_id, entry, fn _index -> :ok end),
+         {:ok, result} <- Writer.commit(repo_id, prepared) do
       Replica.record_local_push(repo_id, result.epoch, result.seq)
       Cluster.announce(repo_id, result.epoch, result.seq)
       {:ok, result}

@@ -4,9 +4,27 @@ defmodule Micelio.Config do
 
   Every value has a default that makes a single-node development cluster work,
   so tests and `iex -S mix` need no environment at all.
+
+  ## Process-local overrides
+
+  Configuration is normally application environment, which is global. That is
+  correct for a node — every process on it serves the same cluster — but it
+  makes the test suite serial: two tests cannot point at different object
+  stores at the same time.
+
+  So a process may override configuration for itself and everything it starts,
+  via `put_overrides/1`. Lookups check the calling process first, then walk
+  `$callers`, then fall back to application environment. `Task` propagates
+  `$callers` automatically, and `Micelio.Replica` copies its starter's
+  overrides at init, so a test's isolation reaches the processes it causes to
+  exist without threading configuration through every function signature.
+
+  Nothing in production sets an override, so the fallback is the only path
+  taken there.
   """
 
   @app :micelio
+  @overrides_key {__MODULE__, :overrides}
 
   @spec node_id() :: String.t()
   def node_id, do: get(:node_id, "micelio-1")
@@ -71,6 +89,18 @@ defmodule Micelio.Config do
   """
   @spec staleness_budget_ms() :: non_neg_integer()
   def staleness_budget_ms, do: get(:staleness_budget_ms, 0)
+
+  @doc """
+  How long a node may reuse a cached authorization policy before revalidating.
+
+  Unlike `staleness_budget_ms`, this does not default to zero. Authorization is
+  on the path of every request, so revalidating each time would double the
+  round trips; and unlike serving a stale repository, which would be a
+  correctness failure, a slightly old policy is a bounded window that is still
+  far tighter than the token lifetime it replaces.
+  """
+  @spec policy_staleness_budget_ms() :: non_neg_integer()
+  def policy_staleness_budget_ms, do: get(:policy_staleness_budget_ms, 5_000)
 
   @spec compaction_entry_threshold() :: pos_integer()
   def compaction_entry_threshold, do: get(:compaction_entry_threshold, 250)
@@ -155,7 +185,47 @@ defmodule Micelio.Config do
   @spec put(atom(), term()) :: :ok
   def put(key, value), do: Application.put_env(@app, key, value)
 
-  defp get(key, default), do: Application.get_env(@app, key, default)
+  @doc """
+  Override configuration for this process and everything it starts.
+
+  Intended for tests. Passing an empty map clears the override.
+  """
+  @spec put_overrides(map()) :: :ok
+  def put_overrides(overrides) when is_map(overrides) do
+    Process.put(@overrides_key, overrides)
+    :ok
+  end
+
+  @doc "The overrides in effect for the calling process, if any."
+  @spec overrides() :: map()
+  def overrides do
+    case Process.get(@overrides_key) do
+      nil -> inherited_overrides()
+      overrides -> overrides
+    end
+  end
+
+  # `$callers` is set by Task and by anything that opts into the convention, so
+  # work spawned on behalf of a test inherits its isolation.
+  defp inherited_overrides do
+    Enum.find_value(Process.get(:"$callers", []), %{}, &overrides_of/1)
+  end
+
+  defp overrides_of(pid) do
+    with {:dictionary, dictionary} <- Process.info(pid, :dictionary),
+         {_key, overrides} <- List.keyfind(dictionary, @overrides_key, 0) do
+      overrides
+    else
+      _ -> nil
+    end
+  end
+
+  defp get(key, default) do
+    case Map.fetch(overrides(), key) do
+      {:ok, value} -> value
+      :error -> Application.get_env(@app, key, default)
+    end
+  end
 
   defp expand_opts(opts) do
     Enum.map(opts, fn

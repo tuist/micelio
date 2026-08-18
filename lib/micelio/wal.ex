@@ -52,6 +52,21 @@ defmodule Micelio.WAL do
   @cas_attempts 12
   @content_type "application/vnd.micelio.wal.v1+protobuf"
 
+  @typedoc """
+  An entry whose object is already stored, ready to be installed in the index.
+
+  `validate` is re-run against the live index on every compare-and-swap
+  attempt, so a check like "this ref must still be where the client thought"
+  is evaluated against the state that actually won, not a stale read.
+  """
+  @type prepared :: %{
+          entry: Entry.t(),
+          key: String.t(),
+          size: non_neg_integer(),
+          digest: String.t(),
+          validate: (Index.t() -> :ok | {:error, term()})
+        }
+
   @doc "Validate a repository identifier, which is also an object-store key prefix."
   @spec valid_id?(term()) :: boolean()
   def valid_id?(id) when is_binary(id) do
@@ -189,6 +204,97 @@ defmodule Micelio.WAL do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  @doc """
+  Append several prepared entries under a single compare-and-swap.
+
+  This is group commit. Each push already uploaded its own packs and its own
+  entry object — both content-addressed, both contention-free — so the only
+  serialized part is installing the pointers in the index. Doing that for a
+  batch costs one read and one conditional write regardless of how many pushes
+  are in it, which is what turns per-repository write throughput from "one
+  round trip per push" into "one round trip per batch".
+
+  Each prepared entry is validated in turn against the index as it evolves, so
+  a batch behaves exactly as if its pushes had arrived one at a time: a push
+  that would be a non-fast-forward *given the ones ahead of it in the batch* is
+  rejected, and the rest still land. Results come back in the order given.
+  """
+  @spec append_batch(repo_id(), [prepared()]) ::
+          {:ok, [{:ok, non_neg_integer()} | {:error, term()}]} | {:error, term()}
+  def append_batch(repo_id, prepared), do: append_batch(repo_id, prepared, @cas_attempts)
+
+  defp append_batch(_repo_id, _prepared, 0), do: {:error, :cas_exhausted}
+
+  defp append_batch(repo_id, prepared, attempts) do
+    with {:ok, index, etag} <- fetch(repo_id) do
+      {updated, results} = apply_batch(index, prepared)
+
+      if updated == index do
+        # Every entry in the batch was rejected, so there is nothing to write.
+        {:ok, results}
+      else
+        case ObjectStore.put(index_key(repo_id), Index.encode(updated),
+               if_match: etag,
+               content_type: @content_type
+             ) do
+          {:ok, _etag} ->
+            :telemetry.execute(
+              [:micelio, :wal, :append_batch],
+              %{size: length(prepared), seq: updated.seq},
+              %{repo_id: repo_id}
+            )
+
+            {:ok, results}
+
+          {:error, :precondition_failed} ->
+            :telemetry.execute([:micelio, :wal, :cas_retry], %{attempts: 1}, %{repo_id: repo_id})
+            backoff(@cas_attempts - attempts)
+            append_batch(repo_id, prepared, attempts - 1)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    end
+  end
+
+  # Fold the batch in order, so each entry sees the ref state left by the ones
+  # before it.
+  defp apply_batch(index, prepared) do
+    {index, results} =
+      Enum.reduce(prepared, {index, []}, fn item, {index, results} ->
+        case item.validate.(index) do
+          :ok ->
+            updated = Index.append(index, item.entry, item.key, item.size, item.digest, Config.node_id())
+            {updated, [{:ok, %{seq: updated.seq, epoch: updated.epoch}} | results]}
+
+          {:error, reason} ->
+            {index, [{:error, reason} | results]}
+        end
+      end)
+
+    {index, Enum.reverse(results)}
+  end
+
+  @doc """
+  Upload an entry object and return what `append_batch/2` needs to install it.
+
+  Separated from the append so the expensive, contention-free part — writing
+  content-addressed objects — happens on whichever node received the push,
+  while only the index update is funnelled through one writer.
+  """
+  @spec prepare(repo_id(), Entry.t(), (Index.t() -> :ok | {:error, term()})) ::
+          {:ok, prepared()} | {:error, term()}
+  def prepare(repo_id, entry, validate) do
+    body = Entry.encode(entry)
+    digest = digest(body)
+    key = entry_key(repo_id, digest)
+
+    with {:ok, _} <- write_immutable(key, body) do
+      {:ok, %{entry: entry, key: key, size: byte_size(body), digest: digest, validate: validate}}
     end
   end
 
