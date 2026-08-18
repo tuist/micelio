@@ -87,6 +87,12 @@ config:
   # answer. Raising it trades that for fewer round trips.
   stalenessBudgetMs: 0
 
+  # How long a node may reuse a cached authorization policy. Not zero, unlike
+  # stalenessBudgetMs: authorization is checked on every request, and a
+  # bounded window here is still far tighter than the token lifetime it
+  # replaces. See docs/multi-tenancy.md.
+  policyStalenessBudgetMs: 5000
+
   compactionEntryThreshold: 250
   compactionBytesThreshold: 268435456
   idleEvictionMs: 3600000

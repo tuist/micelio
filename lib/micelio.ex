@@ -29,7 +29,9 @@ defmodule Micelio do
     * `Micelio.WAL` — the log format and the compare-and-swap protocol
     * `Micelio.Replica` — the per-repository state machine
     * `Micelio.Replica.Sync` — how a replica converges on the log
+    * `Micelio.Ingest.Writer` — why write throughput needs batching, not consensus
     * `Micelio.Cluster` — what distributed Erlang replaces
+    * `Micelio.Policy` — authorization as data, rather than as a service
     * `Micelio.HTTP.GitRouter` — the Git smart HTTP surface
     * `Micelio.MCP.Tools` — the agent-facing surface
   """

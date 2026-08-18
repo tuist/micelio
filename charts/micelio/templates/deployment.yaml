@@ -109,6 +109,8 @@ spec:
               value: {{ .Values.config.defaultReplicas | quote }}
             - name: MICELIO_STALENESS_BUDGET_MS
               value: {{ .Values.config.stalenessBudgetMs | quote }}
+            - name: MICELIO_POLICY_STALENESS_BUDGET_MS
+              value: {{ .Values.config.policyStalenessBudgetMs | quote }}
             - name: MICELIO_COMPACTION_ENTRY_THRESHOLD
               value: {{ .Values.config.compactionEntryThreshold | quote }}
             - name: MICELIO_COMPACTION_BYTES_THRESHOLD
