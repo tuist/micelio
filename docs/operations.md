@@ -198,6 +198,58 @@ the working set, so this means the working set grew.
   repositories, since each has its own independent CAS chain.
 - **Disk** should hold the working set, not the corpus.
 
+## Storage growth, and what is safe to delete
+
+Object storage only grows. Nothing in Micelio deletes an object except
+`DELETE /repositories/<id>`, which removes that repository's prefix entirely.
+That is a deliberate consequence of the provenance guarantee — every state a
+repository has been in stays reconstructible — but it is a cost, and it is
+worth understanding before it surprises you.
+
+Per repository:
+
+| Prefix | Grows with | Notes |
+|---|---|---|
+| `packs/` | every push, plus one full set per compaction | The dominant cost. Compaction writes a fresh full set and the superseded packs stay |
+| `wal/` | every push | Small: a few hundred bytes per entry |
+| `history/` | every compaction | One index snapshot per epoch |
+| `index.pb` | nothing | One object, overwritten under CAS |
+
+A repository pushed to constantly will therefore accumulate roughly one full
+copy of itself per compaction. The compaction thresholds are what control that
+rate: raising `MICELIO_COMPACTION_ENTRY_THRESHOLD` compacts less often and
+stores less, at the cost of slower materialization for a replica starting cold.
+
+**Automatic garbage collection is not implemented.** Deciding a pack is
+unreachable means proving no retained history index references it, and getting
+that wrong destroys history silently, so it is not something to add casually.
+
+The safe mitigation today is a bucket lifecycle policy, which is the same tool
+you would use for any other prefix-organised data:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "micelio-history",
+      "Filter": {"Prefix": "repos/"},
+      "Status": "Enabled",
+      "NoncurrentVersionExpiration": {"NoncurrentDays": 30}
+    }
+  ]
+}
+```
+
+Before expiring anything under `packs/`, be clear about what you are giving up:
+the current index's packs are needed to *serve* the repository, and the packs
+named by snapshots under `history/` are needed to *reconstruct* older states.
+Expiring the latter trades auditability for cost, which is a legitimate trade
+but not a reversible one.
+
+Storage class helps more than deletion for most installations. Packs are
+immutable and written once, so infrequent-access or intelligent tiering applies
+cleanly, and `history/` in particular is written once and read almost never.
+
 ## Backup
 
 The object store is the repository. Back up the bucket; versioning and
