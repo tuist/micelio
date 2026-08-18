@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_VERSION: "2026.4.18"
+  MISE_GITHUB_ATTESTATIONS: 0
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "erlang elixir"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix credo --strict
+      - name: Compile without warnings
+        run: mix compile --warnings-as-errors
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "erlang elixir"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-test-
+      - run: mix deps.get
+      - run: mix test
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "erlang elixir shellspec"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-e2e-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-e2e-
+      - run: mix deps.get
+      # Drives a real git client against a real server backed by real
+      # S3-compatible storage, which is the only way to know the product works.
+      - name: Run the end-to-end suite
+        run: |
+          ./spec/support/stack.sh up
+          shellspec
+      - name: Node logs
+        if: failure()
+        run: tail -200 tmp/e2e/*.log || true
+      - name: Tear down
+        if: always()
+        run: ./spec/support/stack.sh down || true
+
+  proto:
+    name: Schema is up to date
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "erlang elixir protoc"
+      - run: mix deps.get
+      # The generated schema is committed so builds do not need protoc. That is
+      # only safe if it cannot drift from the .proto it came from.
+      - name: Regenerate and diff
+        run: |
+          ./scripts/generate-proto.sh
+          git diff --exit-code lib/micelio/wal/v1/wal.pb.ex \
+            || { echo "::error::wal.pb.ex is out of date; run 'mise run proto' and commit the result"; exit 1; }
+
+  image:
+    name: Container image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: micelio:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: |
+          docker network create micelio-ci
+          docker run -d --name minio --network micelio-ci \
+            -e MINIO_ROOT_USER=micelio -e MINIO_ROOT_PASSWORD=micelio-secret \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          docker run --rm --network micelio-ci --entrypoint sh minio/mc:RELEASE.2025-04-16T18-13-26Z -c \
+            'until mc alias set local http://minio:9000 micelio micelio-secret; do sleep 1; done; mc mb --ignore-existing local/micelio'
+
+          docker run -d --name micelio --network micelio-ci \
+            -e MICELIO_S3_BUCKET=micelio \
+            -e MICELIO_S3_ENDPOINT=http://minio:9000 \
+            -e MICELIO_S3_ACCESS_KEY_ID=micelio \
+            -e MICELIO_S3_SECRET_ACCESS_KEY=micelio-secret \
+            -e MICELIO_S3_REGION=us-east-1 \
+            -e MICELIO_ADMIN_TOKEN=ci \
+            -e MICELIO_AUTH_BACKEND=static \
+            -e MICELIO_AUTH_TOKENS='ci-token=acme:read,write' \
+            micelio:ci
+
+          for i in $(seq 1 60); do
+            docker exec micelio curl -fsS http://127.0.0.1:4002/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+          # A push and a clone through the released artefact, not the source.
+          docker exec micelio sh -c '
+            set -e
+            curl -sS -X POST -H "Authorization: Bearer ci" -H "Content-Type: application/json" \
+              -d "{\"repository\":\"acme/ci\"}" http://127.0.0.1:4002/repositories
+            export HOME=/tmp GIT_AUTHOR_NAME=CI GIT_AUTHOR_EMAIL=ci@e GIT_COMMITTER_NAME=CI GIT_COMMITTER_EMAIL=ci@e
+            mkdir -p /tmp/src && cd /tmp/src && git init -q -b main
+            echo hello > README.md && git add . && git commit -qm init
+            git push -q http://x-access-token:ci-token@127.0.0.1:4000/acme/ci.git main
+            git clone -q http://x-access-token:ci-token@127.0.0.1:4000/acme/ci.git /tmp/clone
+            grep -q hello /tmp/clone/README.md
+          '
+      - name: Container logs
+        if: failure()
+        run: docker logs micelio || true
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/micelio --set objectStore.endpoint=http://minio:9000 --set auth.oidc.audience=micelio
+      - name: Render with autoscaling and ingress enabled
+        run: |
+          helm template micelio charts/micelio \
+            --set objectStore.endpoint=http://minio:9000 \
+            --set auth.oidc.audience=micelio \
+            --set autoscaling.enabled=true \
+            --set ingress.enabled=true \
+            --set serviceMonitor.enabled=true > /dev/null

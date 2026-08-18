@@ -1,0 +1,39 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "micelio.fullname" . }}
+  labels:
+    {{- include "micelio.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "micelio.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    # The primary signal. A clone holds a connection, a process and a git
+    # upload-pack for its whole duration, so concurrency saturates long before
+    # CPU does; scaling on CPU alone reacts far too late.
+    #
+    # Requires prometheus-adapter or KEDA to expose the metric.
+    - type: Pods
+      pods:
+        metric:
+          name: micelio_git_requests_in_flight
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.targetInFlightRequests | quote }}
+    # Secondary, mostly for compaction load.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  {{- with .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

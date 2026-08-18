@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_VERSION: "2026.4.18"
+  MISE_GITHUB_ATTESTATIONS: 0
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  detect:
+    name: Check for releasable changes
+    runs-on: ubuntu-24.04
+    outputs:
+      should-release: ${{ steps.detect.outputs.should-release }}
+      latest-version: ${{ steps.detect.outputs.latest-version }}
+      next-version: ${{ steps.detect.outputs.next-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - name: Detect release
+        id: detect
+        run: mise run release:detect
+
+  image:
+    name: Publish container image
+    needs: detect
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.detect.outputs.next-version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Micelio
+            org.opencontainers.image.description=Git hosting whose source of truth is a write-ahead log in object storage
+            org.opencontainers.image.licenses=MIT
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # arm64 as well as amd64: Graviton and Ampere nodes are cheaper per
+          # unit of the concurrency this workload is actually bound by.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  chart:
+    name: Publish Helm chart
+    needs: [detect, image]
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "helm"
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Package and push
+        run: mise run release:chart --version "${{ needs.detect.outputs.next-version }}" --push --dist dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chart
+          path: dist/*
+
+  publish:
+    name: Publish GitHub release
+    needs: [detect, image, chart]
+    if: needs.detect.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten artifacts
+        run: find dist -type f -exec mv {} dist/ \; || true
+      - name: Generate release notes
+        run: |
+          mise run release:notes --version "${{ needs.detect.outputs.next-version }}" > release-notes.md
+          {
+            echo
+            echo "## Container image"
+            echo
+            echo '```sh'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.detect.outputs.next-version }}"
+            echo '```'
+            echo
+            echo "## Helm chart"
+            echo
+            echo '```sh'
+            echo "helm install micelio oci://ghcr.io/tuist/charts/micelio --version ${{ needs.detect.outputs.next-version }}"
+            echo '```'
+          } >> release-notes.md
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run release:publish --version "${{ needs.detect.outputs.next-version }}" --notes release-notes.md --dist dist

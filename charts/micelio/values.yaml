@@ -1,0 +1,216 @@
+# Micelio.
+#
+# Deployed as a Deployment rather than a StatefulSet, on purpose: a node's disk
+# is a cache of the write-ahead log in object storage, not the source of truth,
+# so pods need no stable identity and no durable volume.
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/tuist/micelio
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# --------------------------------------------------------------------------
+# Object storage. This is the source of truth; everything else is disposable.
+#
+# The store must support conditional writes (If-Match, If-None-Match) and
+# conditional reads (If-None-Match). Without them the compare-and-swap that
+# orders pushes does not exist. S3, MinIO, Tigris, R2 and Ceph all qualify.
+# --------------------------------------------------------------------------
+objectStore:
+  bucket: micelio
+  endpoint: ""
+  region: auto
+  prefix: ""
+  # true for MinIO, Tigris, Ceph; false for virtual-hosted AWS buckets.
+  pathStyle: true
+
+  # Preferred: a Secret with MICELIO_S3_ACCESS_KEY_ID and
+  # MICELIO_S3_SECRET_ACCESS_KEY.
+  existingSecret: ""
+
+  # Only for evaluation. Values here end up in the release manifest.
+  accessKeyId: ""
+  secretAccessKey: ""
+
+# --------------------------------------------------------------------------
+# Authentication. Micelio validates tokens; it never issues them.
+# --------------------------------------------------------------------------
+auth:
+  # oidc | webhook | static | none
+  backend: oidc
+
+  oidc:
+    # The cluster's own issuer, so pods authenticate with the projected service
+    # account token they already have. No secret is ever distributed.
+    issuer: https://kubernetes.default.svc
+    # Must match the audience on the projected token. Binding tokens to this
+    # deployment is what stops a token minted for another service being
+    # replayed here.
+    audience: micelio
+    jwksUri: ""
+    # Turn `system:serviceaccount:<ns>:<name>` into read/write on `<ns>/**`,
+    # so a pod can use its own namespace's repositories with no configuration.
+    namespaceGrants: true
+    grantsClaim: micelio_grants
+
+  webhook:
+    endpoint: ""
+    existingSecret: ""
+
+  static:
+    # "token=account:read,write;other=beta:read"
+    tokens: ""
+    existingSecret: ""
+
+# Bearer token for the admin API. Generated and stored in a Secret if empty.
+adminToken: ""
+
+# Shared secret for distributed Erlang. Generated if empty. Nodes with
+# different cookies silently fail to cluster.
+releaseCookie: ""
+
+# --------------------------------------------------------------------------
+# Behaviour
+# --------------------------------------------------------------------------
+config:
+  defaultReplicas: 3
+
+  # 0 means every read re-validates against object storage before serving,
+  # which is what lets a client talk to any replica and get a consistent
+  # answer. Raising it trades that for fewer round trips.
+  stalenessBudgetMs: 0
+
+  compactionEntryThreshold: 250
+  compactionBytesThreshold: 268435456
+  idleEvictionMs: 3600000
+
+  # Advertised to clients and used as the OAuth resource identifier.
+  publicUrl: ""
+
+extraEnv: []
+
+# --------------------------------------------------------------------------
+# Storage for the warm cache. emptyDir is the default because the cache is
+# disposable; a PVC only saves re-materialization after a restart.
+# --------------------------------------------------------------------------
+persistence:
+  enabled: false
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  size: 100Gi
+  # For emptyDir.
+  sizeLimit: 50Gi
+
+# --------------------------------------------------------------------------
+# Autoscaling.
+#
+# Scale on in-flight requests, not CPU. A clone holds a connection, a process
+# and a git upload-pack for its whole duration, so concurrency saturates long
+# before CPU does and CPU alone reacts far too late.
+#
+# The custom metric needs prometheus-adapter or KEDA; CPU is kept as a
+# secondary trigger for compaction load.
+# --------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 50
+  targetInFlightRequests: 40
+  targetCPUUtilizationPercentage: 75
+  behavior:
+    scaleDown:
+      # Unhurried: a scale-down costs re-materialization on whoever inherits
+      # the repositories, so flapping is more expensive than a little lag.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+service:
+  type: ClusterIP
+  gitPort: 4000
+  adminPort: 4002
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: micelio.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+# Long enough for in-flight clones to finish. Scale-down is safe at any moment
+# because the log already has everything; this is purely about not cutting off
+# a client mid-transfer.
+terminationGracePeriodSeconds: 120
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+
+# Spread replicas across nodes: losing a node should cost a fraction of
+# capacity, not all of it.
+affinity: {}
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: micelio
+
+tracing:
+  enabled: false
+  otlpEndpoint: ""
+  otlpProtocol: http_protobuf

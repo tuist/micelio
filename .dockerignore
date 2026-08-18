@@ -1,0 +1,17 @@
+_build/
+deps/
+.git/
+.github/
+cover/
+doc/
+priv/data/
+tmp/
+test/
+charts/
+spec/
+docs/
+*.md
+!README.md
+.elixir_ls/
+.elixir-tools/
+erl_crash.dump

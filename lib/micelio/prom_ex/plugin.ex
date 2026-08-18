@@ -1,0 +1,274 @@
+defmodule Micelio.PromEx.Plugin do
+  @moduledoc """
+  Micelio's own metrics.
+
+  Grouped by the question each one answers:
+
+  **Is the cluster healthy?** `micelio_wal_read_duration_seconds` bucketed by
+  outcome. A healthy node's reads are overwhelmingly `not_modified`, because
+  that is a metadata-only round trip against object storage. If `modified`
+  starts dominating, replicas are doing catch-up work on the read path.
+
+  **Is there write contention?** `micelio_wal_cas_retries_total` counts pushes
+  that lost a compare-and-swap and had to rebuild against a newer state. A few
+  are normal on a busy repository; many mean the repository is a write hotspot
+  whose throughput is bounded by object store latency.
+
+  **How far behind is this node?** `micelio_replica_entries_behind` on each
+  sync. Persistent non-zero values mean hints are not arriving, or object
+  storage is slow.
+
+  **Should we scale?** `micelio_git_requests_in_flight` is the honest measure
+  of a Git server's load: a clone occupies a connection and a process for its
+  entire duration, so concurrency saturates long before CPU does.
+  """
+
+  use PromEx.Plugin
+
+  @impl true
+  def event_metrics(_opts) do
+    [
+      wal_metrics(),
+      replica_metrics(),
+      push_metrics(),
+      git_metrics(),
+      mcp_metrics(),
+      auth_metrics()
+    ]
+  end
+
+  defp wal_metrics do
+    Event.build(:micelio_wal_event_metrics, [
+      distribution(
+        [:micelio, :wal, :read, :duration],
+        event_name: [:micelio, :wal, :read],
+        measurement: :duration_us,
+        description: "Time to validate a replica's cached view of the log; not_modified is the fast path.",
+        unit: {:microsecond, :second},
+        tags: [:outcome],
+        reporter_options: [buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]]
+      ),
+      counter(
+        [:micelio, :wal, :read, :count],
+        event_name: [:micelio, :wal, :read],
+        description: "Write-ahead log index reads.",
+        tags: [:outcome]
+      ),
+      counter(
+        [:micelio, :wal, :append, :count],
+        event_name: [:micelio, :wal, :append],
+        description: "Entries appended to the log."
+      ),
+      distribution(
+        [:micelio, :wal, :append, :attempts],
+        event_name: [:micelio, :wal, :append],
+        measurement: :attempts,
+        description: "Compare-and-swap attempts needed to commit an entry.",
+        reporter_options: [buckets: [1, 2, 3, 5, 8, 12]]
+      ),
+      counter(
+        [:micelio, :wal, :cas_retry, :count],
+        event_name: [:micelio, :wal, :cas_retry],
+        description: "Pushes that lost a compare-and-swap and retried against newer state."
+      ),
+      counter(
+        [:micelio, :wal, :compact, :count],
+        event_name: [:micelio, :wal, :compact],
+        description: "Compactions performed by this node."
+      )
+    ])
+  end
+
+  defp replica_metrics do
+    Event.build(:micelio_replica_event_metrics, [
+      distribution(
+        [:micelio, :replica, :sync, :duration],
+        event_name: [:micelio, :replica, :sync],
+        measurement: :duration_ms,
+        description: "Time to bring a replica into agreement with the log.",
+        unit: {:millisecond, :second},
+        reporter_options: [buckets: [0.005, 0.025, 0.1, 0.5, 1, 5, 15, 60, 300]]
+      ),
+      distribution(
+        [:micelio, :replica, :sync, :entries_behind],
+        event_name: [:micelio, :replica, :sync],
+        measurement: :entries_behind,
+        description: "How many log entries a replica was behind when it synced.",
+        reporter_options: [buckets: [0, 1, 5, 25, 100, 500, 2500]]
+      ),
+      sum(
+        [:micelio, :replica, :sync, :packs_downloaded],
+        event_name: [:micelio, :replica, :sync],
+        measurement: :packs_downloaded,
+        description: "Packfiles downloaded from object storage."
+      ),
+      counter(
+        [:micelio, :replica, :evict, :count],
+        event_name: [:micelio, :replica, :evict],
+        description: "Repositories evicted from local disk."
+      )
+    ])
+  end
+
+  defp push_metrics do
+    Event.build(:micelio_push_event_metrics, [
+      distribution(
+        [:micelio, :push, :committed, :duration],
+        event_name: [:micelio, :push, :committed],
+        measurement: :duration_ms,
+        description: "Time from receiving a push to it being durable in the log.",
+        unit: {:millisecond, :second},
+        reporter_options: [buckets: [0.01, 0.05, 0.1, 0.5, 1, 5, 15, 60]]
+      ),
+      counter(
+        [:micelio, :push, :committed, :count],
+        event_name: [:micelio, :push, :committed],
+        description: "Pushes committed to the log."
+      ),
+      counter(
+        [:micelio, :push, :rejected, :count],
+        event_name: [:micelio, :push, :rejected],
+        description: "Pushes rejected, by reason.",
+        tags: [:reason]
+      )
+    ])
+  end
+
+  defp git_metrics do
+    Event.build(:micelio_git_event_metrics, [
+      distribution(
+        [:micelio, :git, :command, :duration],
+        event_name: [:micelio, :git, :command],
+        measurement: :duration_us,
+        description: "Duration of git plumbing invocations.",
+        unit: {:microsecond, :second},
+        tags: [:subcommand],
+        reporter_options: [buckets: [0.001, 0.01, 0.05, 0.25, 1, 5, 30, 300]]
+      ),
+      distribution(
+        [:micelio, :git, :served, :duration],
+        event_name: [:micelio, :git, :served],
+        measurement: :duration_ms,
+        description: "Duration of a served Git protocol request.",
+        unit: {:millisecond, :second},
+        tags: [:service],
+        reporter_options: [buckets: [0.01, 0.1, 1, 5, 30, 120, 600]]
+      ),
+      sum(
+        [:micelio, :git, :served, :bytes],
+        event_name: [:micelio, :git, :served],
+        measurement: :bytes,
+        description: "Bytes served over the Git protocol.",
+        tags: [:service]
+      ),
+      counter(
+        [:micelio, :git, :aborted, :count],
+        event_name: [:micelio, :git, :aborted],
+        description: "Git streams that ended before completing.",
+        tags: [:service]
+      )
+    ])
+  end
+
+  defp mcp_metrics do
+    Event.build(:micelio_mcp_event_metrics, [
+      distribution(
+        [:micelio, :mcp, :request, :duration],
+        event_name: [:micelio, :mcp, :request],
+        measurement: :duration_us,
+        description: "Duration of an MCP request, by method.",
+        unit: {:microsecond, :second},
+        tags: [:method],
+        reporter_options: [buckets: [0.001, 0.01, 0.05, 0.25, 1, 5, 30]]
+      ),
+      counter(
+        [:micelio, :mcp, :request, :count],
+        event_name: [:micelio, :mcp, :request],
+        description: "MCP requests handled.",
+        tags: [:method, :outcome]
+      )
+    ])
+  end
+
+  defp auth_metrics do
+    Event.build(:micelio_auth_event_metrics, [
+      counter(
+        [:micelio, :auth, :denied, :count],
+        event_name: [:micelio, :auth, :denied],
+        description: "Authorization denials, by permission.",
+        tags: [:permission]
+      )
+    ])
+  end
+
+  @impl true
+  def polling_metrics(opts) do
+    interval = Keyword.get(opts, :poll_rate, 10_000)
+
+    [
+      Polling.build(
+        :micelio_cluster_polling_metrics,
+        interval,
+        {__MODULE__, :observe, []},
+        [
+          last_value(
+            [:micelio, :cluster, :observed, :size],
+            event_name: [:micelio, :cluster, :observed],
+            measurement: :size,
+            description: "Nodes currently in the cluster."
+          ),
+          last_value(
+            [:micelio, :cluster, :observed, :resident],
+            event_name: [:micelio, :cluster, :observed],
+            measurement: :resident,
+            description: "Repositories materialized on this node."
+          ),
+          last_value(
+            [:micelio, :cluster, :observed, :in_flight],
+            event_name: [:micelio, :cluster, :observed],
+            measurement: :in_flight,
+            description:
+              "Git protocol requests currently being served. The right signal to autoscale on: " <>
+                "a clone holds a connection for its whole duration, so concurrency saturates before CPU."
+          ),
+          last_value(
+            [:micelio, :cluster, :observed, :disk_used_bytes],
+            event_name: [:micelio, :cluster, :observed],
+            measurement: :disk_used_bytes,
+            description: "Bytes the local repository cache is occupying."
+          )
+        ]
+      )
+    ]
+  end
+
+  @doc false
+  def observe do
+    :telemetry.execute(
+      [:micelio, :cluster, :observed],
+      %{
+        size: length(Micelio.Cluster.members()),
+        resident: length(Micelio.Replica.resident()),
+        in_flight: in_flight(),
+        disk_used_bytes: disk_used()
+      },
+      %{}
+    )
+  end
+
+  defp in_flight, do: Micelio.Telemetry.InFlight.count()
+
+  defp disk_used do
+    Micelio.Config.data_dir()
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.reduce(0, fn path, acc ->
+      case File.stat(path) do
+        {:ok, %{type: :regular, size: size}} -> acc + size
+        _ -> acc
+      end
+    end)
+  rescue
+    _ -> 0
+  end
+end

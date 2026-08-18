@@ -1,0 +1,211 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "micelio.fullname" . }}
+  labels:
+    {{- include "micelio.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "micelio.selectorLabels" . | nindent 6 }}
+  strategy:
+    # A rolling update is safe at any moment: a terminating pod's repositories
+    # are already in the log, so the only cost is that whoever inherits them
+    # materializes on first request.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        {{- include "micelio.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Restart pods when configuration changes, so a `helm upgrade` that
+        # only touches values actually takes effect.
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "micelio.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: micelio
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: git
+              containerPort: 4000
+              protocol: TCP
+            - name: admin
+              containerPort: 4002
+              protocol: TCP
+            - name: epmd
+              containerPort: 4369
+              protocol: TCP
+          env:
+            # The pod IP is the only value guaranteed unique and routable
+            # without a StatefulSet, so it becomes the Erlang node name.
+            - name: MICELIO_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: MICELIO_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MICELIO_RELEASE_NAME
+              value: micelio
+            - name: MICELIO_CLUSTER_STRATEGY
+              value: kubernetes
+            - name: MICELIO_HEADLESS_SERVICE
+              value: {{ include "micelio.headlessServiceName" . }}
+
+            - name: MICELIO_S3_BUCKET
+              value: {{ .Values.objectStore.bucket | quote }}
+            - name: MICELIO_S3_ENDPOINT
+              value: {{ required "objectStore.endpoint is required: the write-ahead log is the source of truth" .Values.objectStore.endpoint | quote }}
+            - name: MICELIO_S3_REGION
+              value: {{ .Values.objectStore.region | quote }}
+            - name: MICELIO_S3_PREFIX
+              value: {{ .Values.objectStore.prefix | quote }}
+            - name: MICELIO_S3_PATH_STYLE
+              value: {{ .Values.objectStore.pathStyle | quote }}
+
+            - name: MICELIO_DATA_DIR
+              value: /var/lib/micelio/repositories
+            - name: MICELIO_DEFAULT_REPLICAS
+              value: {{ .Values.config.defaultReplicas | quote }}
+            - name: MICELIO_STALENESS_BUDGET_MS
+              value: {{ .Values.config.stalenessBudgetMs | quote }}
+            - name: MICELIO_COMPACTION_ENTRY_THRESHOLD
+              value: {{ .Values.config.compactionEntryThreshold | quote }}
+            - name: MICELIO_COMPACTION_BYTES_THRESHOLD
+              value: {{ .Values.config.compactionBytesThreshold | quote }}
+            - name: MICELIO_IDLE_EVICTION_MS
+              value: {{ .Values.config.idleEvictionMs | quote }}
+            {{- with .Values.config.publicUrl }}
+            - name: MICELIO_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+
+            - name: MICELIO_AUTH_BACKEND
+              value: {{ .Values.auth.backend | quote }}
+            {{- if eq .Values.auth.backend "oidc" }}
+            - name: MICELIO_OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: MICELIO_OIDC_AUDIENCE
+              value: {{ required "auth.oidc.audience is required: without it tokens are not bound to this deployment" .Values.auth.oidc.audience | quote }}
+            {{- with .Values.auth.oidc.jwksUri }}
+            - name: MICELIO_OIDC_JWKS_URI
+              value: {{ . | quote }}
+            {{- end }}
+            - name: MICELIO_OIDC_NAMESPACE_GRANTS
+              value: {{ .Values.auth.oidc.namespaceGrants | quote }}
+            - name: MICELIO_OIDC_GRANTS_CLAIM
+              value: {{ .Values.auth.oidc.grantsClaim | quote }}
+            {{- else if eq .Values.auth.backend "webhook" }}
+            - name: MICELIO_AUTH_ENDPOINT
+              value: {{ required "auth.webhook.endpoint is required" .Values.auth.webhook.endpoint | quote }}
+            {{- end }}
+
+            {{- if .Values.tracing.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ required "tracing.otlpEndpoint is required when tracing is enabled" .Values.tracing.otlpEndpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.tracing.otlpProtocol | quote }}
+            {{- end }}
+
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "micelio.fullname" . }}-secrets
+            {{- with .Values.objectStore.existingSecret }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+            {{- if and (eq .Values.auth.backend "webhook") .Values.auth.webhook.existingSecret }}
+            - secretRef:
+                name: {{ .Values.auth.webhook.existingSecret }}
+            {{- end }}
+            {{- if and (eq .Values.auth.backend "static") .Values.auth.static.existingSecret }}
+            - secretRef:
+                name: {{ .Values.auth.static.existingSecret }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: admin
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            # Depends on object storage being reachable: a node that cannot
+            # read the log cannot answer consistently, and should leave
+            # rotation rather than serve stale data.
+            httpGet:
+              path: /ready
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: admin
+            failureThreshold: 30
+            periodSeconds: 2
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: repositories
+              mountPath: /var/lib/micelio/repositories
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: repositories
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "micelio.fullname" . }}
+          {{- else }}
+          # The cache is disposable by design, so an emptyDir is the honest
+          # representation of it. Put the node's local NVMe behind this.
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.sizeLimit }}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}

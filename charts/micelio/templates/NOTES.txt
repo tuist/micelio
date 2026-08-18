@@ -1,0 +1,50 @@
+Micelio is starting.
+
+  Nodes:        {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }} (autoscaled){{ else }}{{ .Values.replicaCount }}{{ end }}
+  Object store: {{ .Values.objectStore.endpoint }}/{{ .Values.objectStore.bucket }}
+  Auth:         {{ .Values.auth.backend }}
+
+Get the admin token:
+
+  kubectl get secret -n {{ .Release.Namespace }} {{ include "micelio.fullname" . }}-secrets \
+    -o jsonpath='{.data.MICELIO_ADMIN_TOKEN}' | base64 -d
+
+Check the cluster formed. Members should list every pod:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "micelio.fullname" . }}-admin {{ .Values.service.adminPort }}:{{ .Values.service.adminPort }}
+  curl -H "Authorization: Bearer $TOKEN" localhost:{{ .Values.service.adminPort }}/cluster
+
+Create a repository. Any pod will do; there is no primary to find:
+
+  curl -XPOST -H "Authorization: Bearer $TOKEN" \
+    -H 'content-type: application/json' \
+    -d '{"repository":"acme/app"}' \
+    localhost:{{ .Values.service.adminPort }}/repositories
+
+{{- if eq .Values.auth.backend "oidc" }}
+
+Pods authenticate with their own projected service account token. Add this to
+a workload that needs Git access:
+
+  volumes:
+    - name: micelio-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: {{ .Values.auth.oidc.audience }}
+              expirationSeconds: 3600
+              path: token
+
+Then:
+
+  git -c http.extraHeader="Authorization: Bearer $(cat /var/run/secrets/micelio/token)" \
+      clone http://{{ include "micelio.fullname" . }}.{{ .Release.Namespace }}:{{ .Values.service.gitPort }}/<namespace>/<repo>.git
+
+No secret has to be created or distributed: the kubelet already rotates it.
+{{- end }}
+
+{{- if not .Values.ingress.enabled }}
+
+Nothing is exposed outside the cluster. Set ingress.enabled=true when you are
+ready, and keep the admin Service internal.
+{{- end }}

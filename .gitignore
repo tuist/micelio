@@ -1,0 +1,18 @@
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+/code-*.tar
+.elixir_ls/
+.elixir-tools/
+
+# Local runtime state: materialized repositories and the dev object store.
+/tmp/
+/priv/data/
+.env
+
+# End-to-end scratch state
+/spec/support/*.pid

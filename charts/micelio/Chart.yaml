@@ -1,0 +1,16 @@
+apiVersion: v2
+name: micelio
+description: Git hosting whose source of truth is a write-ahead log in object storage
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/tuist/micelio
+sources:
+  - https://github.com/tuist/micelio
+keywords:
+  - git
+  - mcp
+  - object-storage
+maintainers:
+  - name: Tuist
+    url: https://github.com/tuist

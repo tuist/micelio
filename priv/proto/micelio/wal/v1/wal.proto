@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+// The write-ahead log's on-the-wire schema.
+//
+// These messages are not an internal detail: they are the durable, permanent
+// representation of every repository Micelio has ever served, read back by
+// nodes running versions that do not exist yet. That is why they are defined
+// here rather than encoded ad hoc.
+//
+// Compatibility rules, which are load-bearing rather than stylistic:
+//
+//   * Never reuse or renumber a field. Add new ones with new tags.
+//   * Never change a field's type. Deprecate and add.
+//   * Treat unknown fields as data to preserve, not noise to drop; a mixed
+//     cluster mid-rollout has old nodes rewriting objects that new nodes wrote.
+//   * Enums always keep a zero UNSPECIFIED member so an unrecognised value is
+//     distinguishable from an absent one.
+package micelio.wal.v1;
+
+// A packfile recorded in the log. Packs are immutable and content-addressed,
+// so a key that already exists holds equivalent bytes.
+message Pack {
+  // Object store key, relative to the configured prefix.
+  string key = 1;
+  // Size in bytes, used for compaction thresholds and capacity reporting.
+  uint64 size = 2;
+  // Lowercase hex SHA-256 of the pack bytes. Verified after download so a
+  // truncated transfer fails before Git ever sees it.
+  string digest = 3;
+}
+
+// One reference update within a push. The all-zero object id means "absent",
+// following Git's own convention: a zero `old_oid` creates, a zero `new_oid`
+// deletes.
+message RefCommand {
+  string ref = 1;
+  string old_oid = 2;
+  string new_oid = 3;
+}
+
+enum EntryType {
+  ENTRY_TYPE_UNSPECIFIED = 0;
+  // A client push: ref updates plus the packs carrying their objects.
+  ENTRY_TYPE_PUSH = 1;
+  // A symbolic ref change, such as moving the default branch.
+  ENTRY_TYPE_SYMREF = 2;
+  // Repository creation, recorded so provenance starts at a known point.
+  ENTRY_TYPE_CREATE = 3;
+}
+
+// Who caused an entry. Kept for audit: every state a repository has been in is
+// attributable, because every entry is retained.
+message Actor {
+  string account = 1;
+  string subject = 2;
+  string node = 3;
+  string remote_addr = 4;
+}
+
+// One immutable record in the log.
+//
+// The sequence number is deliberately absent: order is assigned by the index,
+// which is the only object under compare-and-swap. Keeping it out of the body
+// is what makes an entry content-addressable, and therefore what makes
+// retrying a lost CAS free rather than a re-upload.
+message Entry {
+  EntryType type = 1;
+  repeated RefCommand commands = 2;
+  repeated Pack packs = 3;
+  map<string, string> symrefs = 4;
+  Actor actor = 5;
+  // Unix milliseconds. Advisory only; ordering comes from the index.
+  int64 at_ms = 6;
+}
+
+// The index's reference to an entry.
+//
+// It repeats the entry's packs rather than only pointing at it. That looks
+// redundant, and it is the reason catching up costs exactly one read: a
+// replica can compute everything it needs — which packs to download, which
+// refs to end up with — from the index alone, without fetching a single entry
+// body. Entry bodies then exist purely for audit, which is what they are
+// actually for.
+message EntryPointer {
+  uint64 seq = 1;
+  string key = 2;
+  EntryType type = 3;
+  // Lowercase hex SHA-256 of the entry's encoded bytes.
+  string digest = 4;
+  uint64 size = 5;
+  int64 at_ms = 6;
+  // Packs this entry introduced. Immutable and content-addressed, so a replica
+  // that already holds one by name may skip it.
+  repeated Pack packs = 7;
+}
+
+// The result of a compaction: the complete state a replica reaches by
+// downloading these packs and setting exactly these refs.
+message Base {
+  repeated Pack packs = 1;
+  // Full ref state. Anything a replica holds that is absent here is stale.
+  map<string, string> refs = 2;
+  map<string, string> symrefs = 3;
+  // The sequence number this base is equivalent to having replayed up to.
+  uint64 seq = 4;
+  int64 at_ms = 5;
+}
+
+// The single mutable object per repository, and the only one under CAS.
+//
+// A replica is up to date when its (epoch, seq) equals this message's. `epoch`
+// changes only on compaction; seeing a higher one tells a replica to adopt the
+// new base rather than continue replaying.
+message Index {
+  string repo_id = 1;
+  uint64 epoch = 2;
+  uint64 seq = 3;
+  Base base = 4;
+  repeated EntryPointer entries = 5;
+  // Desired replica count. A monorepo absorbing CI load names many; a
+  // throwaway repository names one, because durability comes from the store.
+  uint32 replicas = 6;
+  int64 created_at_ms = 7;
+  int64 updated_at_ms = 8;
+  // Node that performed the most recent successful CAS. Diagnostic only.
+  string updated_by = 9;
+  // Default branch for a repository that has no refs yet, so an empty clone
+  // still gets a sensible HEAD.
+  string default_branch = 10;
+
+  // The repository's complete current ref state.
+  //
+  // Keeping it here rather than deriving it by replaying entries is what makes
+  // both halves of the system cheap. A replica converges by installing packs
+  // and setting refs to exactly this map — one operation regardless of how far
+  // behind it was — instead of replaying every push in order. And a pusher can
+  // check a proposed update against the real current value before winning the
+  // compare-and-swap, which is what makes "reject non-fast-forwards" mean
+  // something across nodes rather than only locally.
+  map<string, string> refs = 11;
+}

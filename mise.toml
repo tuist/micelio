@@ -1,0 +1,63 @@
+# Micelio — Git replication built on a write-ahead log in object storage.
+#
+# The toolchain is pinned so laptops, CI and build images produce identical
+# BEAM bytecode. Bump erlang and elixir together: an Elixir build is tied to
+# the OTP major it was compiled against.
+[tools]
+erlang = "29.0.5"
+elixir = "1.20.3-otp-29"
+# The write-ahead log is a persisted wire format, so its schema is compiled
+# from .proto rather than hand-written. See priv/proto and `mise run proto`.
+protoc = "35.1"
+# End-to-end tests drive a real server with a real git client over the real
+# smart-HTTP protocol, which is a shell problem, not an ExUnit one.
+shellspec = "0.28.1"
+# Releases are cut from conventional commits; see mise/tasks/release.
+git-cliff = "2.10.1"
+helm = "3.19.0"
+
+[env]
+# Never pin MIX_ENV here: `mix test` only switches to :test when MIX_ENV is
+# unset, so exporting it would silently run the suite against the dev config.
+ERL_AFLAGS = "-kernel shell_history enabled"
+
+[tasks.setup]
+description = "Install dependencies and compile"
+run = ["mix deps.get", "mix compile"]
+
+[tasks.proto]
+description = "Regenerate the write-ahead log schema from priv/proto"
+run = "./scripts/generate-proto.sh"
+
+[tasks.test]
+description = "Run the unit test suite"
+run = "mix test"
+
+[tasks."e2e:up"]
+description = "Start MinIO and two clustered Micelio nodes"
+# MinIO comes from a pinned container image rather than a mise tool: upstream
+# no longer publishes per-version archives for every platform, and a pinned
+# image is what CI runs anyway.
+run = "./spec/support/stack.sh up"
+
+[tasks."e2e:down"]
+description = "Stop the end-to-end stack"
+run = "./spec/support/stack.sh down"
+
+[tasks."e2e:logs"]
+description = "Tail the end-to-end nodes' logs"
+run = "./spec/support/stack.sh logs"
+
+[tasks.e2e]
+description = "Run the end-to-end suite against a live server and real S3"
+# The stack is left standing on failure so it can be inspected; `mise run
+# e2e:down` cleans up.
+run = ["./spec/support/stack.sh up", "shellspec", "./spec/support/stack.sh down"]
+
+[tasks.lint]
+description = "Check formatting and run Credo"
+run = ["mix format --check-formatted", "mix credo --strict"]
+
+[tasks.server]
+description = "Run a single node against the local filesystem object store"
+run = "iex -S mix"
