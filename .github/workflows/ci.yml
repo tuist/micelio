@@ -190,9 +190,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
+      # Three workers, not one. A single-node cluster cannot show pods
+      # spreading, placement agreeing across machines, or a repository being
+      # served by a node that never held it — which is most of what this
+      # architecture claims.
       - uses: helm/kind-action@v1
         with:
           cluster_name: micelio
+          config: .github/kind-cluster.yaml
 
       - name: Build the image and load it into the cluster
         run: |
@@ -242,7 +247,7 @@ jobs:
 
           helm install micelio charts/micelio -n micelio \
             --set image.repository=micelio --set image.tag=ci --set image.pullPolicy=IfNotPresent \
-            --set replicaCount=2 \
+            --set replicaCount=3 \
             --set objectStore.endpoint=http://minio:9000 \
             --set objectStore.bucket=micelio \
             --set objectStore.region=us-east-1 \
@@ -252,6 +257,13 @@ jobs:
             --set adminToken=ci-admin \
             --set resources.requests.cpu=100m \
             --wait --timeout=300s
+
+      - name: The pods landed on different nodes
+        run: |
+          nodes=$(kubectl -n micelio get pods -l app.kubernetes.io/name=micelio \
+            -o 'custom-columns=NODE:.spec.nodeName' --no-headers | sort -u | wc -l)
+          echo "pods are spread across $nodes nodes"
+          [ "$nodes" -ge 2 ] || { echo "::error::all replicas landed on one node"; exit 1; }
 
       - name: The pods clustered themselves
         run: |
@@ -282,6 +294,24 @@ jobs:
             export HOME=/tmp
             git clone -q http://x-access-token:ci-token@127.0.0.1:4000/acme/ci.git /tmp/c
             grep -q hello /tmp/c/README.md
+          '
+
+      - name: A repository with no copy left on any disk is rebuilt from the log
+        run: |
+          # The claim the whole design rests on. Evicting everywhere leaves the
+          # log in object storage as the only copy; serving must still work.
+          for pod in $(kubectl -n micelio get pods -l app.kubernetes.io/name=micelio -o name | sed 's|pod/||'); do
+            kubectl -n micelio exec "$pod" -- \
+              curl -sS -m 10 -X POST -H 'Authorization: Bearer ci-admin' \
+              http://127.0.0.1:4002/evict/acme/ci >/dev/null
+            remaining=$(kubectl -n micelio exec "$pod" -- sh -c 'ls /var/lib/micelio/repositories/acme 2>/dev/null | wc -l')
+            [ "$remaining" = "0" ] || { echo "::error::$pod still holds a copy"; exit 1; }
+          done
+
+          kubectl -n micelio run rebuild --rm -i --restart=Never --image=alpine/git:latest --command -- sh -c '
+            export HOME=/tmp
+            git clone -q http://x-access-token:ci-token@micelio:4000/acme/ci.git /tmp/r
+            grep -q hello /tmp/r/README.md
           '
 
       - name: Serving through the Service, which round-robins across pods

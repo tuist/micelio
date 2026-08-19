@@ -118,6 +118,9 @@ extraEnv: []
 # Storage for the warm cache. emptyDir is the default because the cache is
 # disposable; a PVC only saves re-materialization after a restart.
 # --------------------------------------------------------------------------
+# Each pod gets its own volume, because the cache is per-pod: several replicas
+# sharing one set of Git directories would have several nodes repacking and
+# updating the same refs at once.
 persistence:
   enabled: false
   storageClass: ""
@@ -140,8 +143,16 @@ autoscaling:
   enabled: false
   minReplicas: 3
   maxReplicas: 50
-  targetInFlightRequests: 40
   targetCPUUtilizationPercentage: 75
+
+  # In-flight requests are the better signal, but the metric needs
+  # prometheus-adapter or KEDA to reach the HPA — and a HorizontalPodAutoscaler
+  # that names a metric nobody serves does not fall back to the others: it
+  # reports ScalingActive=False and stops scaling entirely, while still looking
+  # healthy at a glance. So this is off unless you have an adapter.
+  inFlightMetric:
+    enabled: false
+    target: 40
   behavior:
     scaleDown:
       # Unhurried: a scale-down costs re-materialization on whoever inherits

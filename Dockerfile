@@ -72,7 +72,10 @@ COPY --from=builder --chown=micelio:micelio /app/_build/prod/rel/micelio ./
 
 USER micelio
 
-ENV MICELIO_DATA_DIR=/var/lib/micelio/repositories \
+# Also set here so `docker run` of this image behaves the same as the release
+# script; see rel/env.sh.eex for why this is not left to the runtime's default.
+ENV ERL_MAX_PORTS=65536 \
+    MICELIO_DATA_DIR=/var/lib/micelio/repositories \
     MICELIO_GIT_PORT=4000 \
     MICELIO_HOOK_PORT=4001 \
     MICELIO_ADMIN_PORT=4002

@@ -1,0 +1,10 @@
+# Three workers, so CI can observe the properties a single node cannot:
+# pods spreading across machines, every node computing the same placement, and
+# a repository being served by a node that never held it.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

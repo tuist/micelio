@@ -31,6 +31,7 @@ exist, and Micelio will not be safe.
 ### Behaviour
 
 | Variable | Default | Notes |
+| `MICELIO_MAX_PORTS` | `65536` | Ceiling on concurrent Git streams and connections. Raising it costs memory: the BEAM pre-allocates the whole table, and a container's default file-descriptor limit would otherwise make that 1.5 GB |
 |---|---|---|
 | `MICELIO_DEFAULT_REPLICAS` | `3` | Per-repository, overridable |
 | `MICELIO_STALENESS_BUDGET_MS` | `0` | See below |

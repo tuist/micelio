@@ -230,8 +230,28 @@ spec:
       volumes:
         - name: repositories
           {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "micelio.fullname" . }}
+          # A generic ephemeral volume: one claim per pod, created and deleted
+          # with it.
+          #
+          # Emphatically not a single shared PersistentVolumeClaim. A
+          # ReadWriteOnce volume can only attach to one node, so every replica
+          # is dragged onto that node — silently defeating the spread
+          # constraint — and they then share one set of Git directories, with
+          # several nodes repacking and updating the same refs concurrently.
+          ephemeral:
+            volumeClaimTemplate:
+              metadata:
+                labels:
+                  {{- include "micelio.selectorLabels" . | nindent 18 }}
+              spec:
+                accessModes:
+                  {{- toYaml .Values.persistence.accessModes | nindent 18 }}
+                {{- with .Values.persistence.storageClass }}
+                storageClassName: {{ . }}
+                {{- end }}
+                resources:
+                  requests:
+                    storage: {{ .Values.persistence.size }}
           {{- else }}
           # The cache is disposable by design, so an emptyDir is the honest
           # representation of it. Put the node's local NVMe behind this.

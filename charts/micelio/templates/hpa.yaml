@@ -13,19 +13,22 @@ spec:
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
-    # The primary signal. A clone holds a connection, a process and a git
-    # upload-pack for its whole duration, so concurrency saturates long before
-    # CPU does; scaling on CPU alone reacts far too late.
+    {{- if .Values.autoscaling.inFlightMetric.enabled }}
+    # The better signal, when something is serving it. A clone holds a
+    # connection, a process and a git upload-pack for its whole duration, so
+    # concurrency saturates long before CPU does and CPU alone reacts late.
     #
-    # Requires prometheus-adapter or KEDA to expose the metric.
+    # Requires prometheus-adapter or KEDA. Without one the HPA cannot compute a
+    # replica count *at all* — a metric it cannot fetch disables the whole
+    # object rather than falling back to the others.
     - type: Pods
       pods:
         metric:
           name: micelio_git_requests_in_flight
         target:
           type: AverageValue
-          averageValue: {{ .Values.autoscaling.targetInFlightRequests | quote }}
-    # Secondary, mostly for compaction load.
+          averageValue: {{ .Values.autoscaling.inFlightMetric.target | quote }}
+    {{- end }}
     - type: Resource
       resource:
         name: cpu

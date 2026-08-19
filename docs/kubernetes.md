@@ -51,14 +51,14 @@ autoscaling:
   enabled: true
   minReplicas: 3
   maxReplicas: 50
-  metrics:
-    - type: Pods
-      pods:
-        metric:
-          name: micelio_git_requests_in_flight
-        target:
-          type: AverageValue
-          averageValue: "40"
+
+  # Needs prometheus-adapter or KEDA. Off by default, and deliberately so: an
+  # HPA that names a metric nobody serves does not fall back to CPU, it stops
+  # scaling entirely — while still looking healthy until you read its
+  # conditions.
+  inFlightMetric:
+    enabled: true
+    target: 40
 ```
 
 **Scale on in-flight requests, not CPU.** A clone holds a connection, a process
@@ -151,7 +151,13 @@ persistence:
   storageClass: local-nvme
 ```
 
-Either works. A PVC survives restarts and saves re-materialization; an
+Either works. Each pod gets its own volume — a generic ephemeral claim, created
+and deleted with the pod — because the cache is per-pod: replicas sharing one
+set of Git directories would have several nodes repacking and updating the same
+refs at once. A single ReadWriteOnce claim would also pin every replica to one
+node, quietly undoing the spread constraint above.
+
+A claim survives a container restart and saves re-materialization; an
 `emptyDir` is simpler and rebuilds in seconds for anything but a large monorepo.
 Size it for the working set, not the corpus — the reaper evicts what nobody
 touches.
