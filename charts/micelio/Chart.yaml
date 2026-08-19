@@ -14,3 +14,5 @@ keywords:
 maintainers:
   - name: Tuist
     url: https://github.com/tuist
+annotations:
+  artifacthub.io/license: MPL-2.0

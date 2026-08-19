@@ -2,7 +2,7 @@ defmodule Micelio.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/tuist/code"
+  @source_url "https://github.com/tuist/micelio"
 
   def project do
     [

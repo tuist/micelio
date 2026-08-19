@@ -126,6 +126,10 @@ mise run lint      # formatting and Credo
 mise run proto     # regenerate the log schema after editing priv/proto
 ```
 
+[`AGENTS.md`](AGENTS.md) covers the conventions this codebase depends on —
+why every test is `async: true`, which commands are safe to run under MuonTrap,
+and the handful of landmines that have already cost someone a day.
+
 ## Prior art
 
 The architecture follows the one Cursor described in [Git at any
@@ -138,4 +142,9 @@ writing: the log, the compare-and-swap, and the convergence rule.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Copyright 2026 Tuist GmbH. Mozilla Public License 2.0, see [LICENSE](LICENSE).
+
+MPL-2.0 is file-level copyleft: changes to Micelio's own source stay open, but
+it can be deployed alongside and linked from code under any license, including
+proprietary. Running a modified Micelio as a service does not oblige you to
+publish anything beyond the modified files themselves.
