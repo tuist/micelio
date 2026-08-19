@@ -194,12 +194,28 @@ defmodule Micelio.WAL do
           {:ok, %{seq: updated.seq, epoch: updated.epoch, index: updated}}
 
         {:error, :precondition_failed} ->
-          # Somebody else's push landed between our read and our write. Their
-          # entry is now part of the history we have to build on, so start over
-          # from the state they left rather than forcing ours over the top.
+          # Either somebody else's push landed between our read and our write,
+          # or ours landed and we never heard the answer. Those are
+          # indistinguishable from here, and treating the second as the first
+          # is how an operation that succeeded gets reported as rejected.
+          #
+          # The entry is addressed by the hash of its own bytes, so the
+          # question is answerable: if the index already carries this exact
+          # entry, the write was ours and it is already durable.
           :telemetry.execute([:micelio, :wal, :cas_retry], %{attempts: 1}, %{repo_id: repo_id})
-          backoff(@cas_attempts - attempts)
-          append(repo_id, build, attempts - 1)
+
+          case already_committed(repo_id, digest) do
+            {:ok, position} ->
+              :telemetry.execute([:micelio, :wal, :ambiguous_commit], %{seq: position.seq}, %{
+                repo_id: repo_id
+              })
+
+              {:ok, position}
+
+            :no ->
+              backoff(@cas_attempts - attempts)
+              append(repo_id, build, attempts - 1)
+          end
 
         {:error, reason} ->
           {:error, reason}
@@ -258,6 +274,20 @@ defmodule Micelio.WAL do
             {:error, reason}
         end
       end
+    end
+  end
+
+  # Whether an entry with this digest is already installed.
+  #
+  # Only meaningful because entries are content-addressed and a digest is
+  # therefore unique to one proposed change: finding it means this attempt
+  # already succeeded, not that someone else made the same change.
+  defp already_committed(repo_id, digest) do
+    with {:ok, index, _etag} <- fetch(repo_id),
+         pointer when not is_nil(pointer) <- Enum.find(index.entries, &(&1.digest == digest)) do
+      {:ok, %{seq: pointer.seq, epoch: index.epoch, index: index}}
+    else
+      _ -> :no
     end
   end
 

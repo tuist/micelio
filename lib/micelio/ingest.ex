@@ -117,11 +117,25 @@ defmodule Micelio.Ingest do
     # Re-run on every compare-and-swap attempt, against the index that actually
     # won, so a push racing another is judged against the winner's result and
     # not against whatever was true when it started.
-    validate = fn index -> check_fast_forward(index, commands) end
+    # Both checks run on every compare-and-swap attempt. The name check does
+    # not depend on the index, but it belongs here because this is the last
+    # point before a command becomes part of the log, and the log is where an
+    # unrepresentable name does permanent damage.
+    validate = fn index ->
+      with :ok <- check_ref_names(commands) do
+        check_fast_forward(index, commands)
+      end
+    end
 
     with {:ok, prepared} <- WAL.prepare(repo_id, entry, validate) do
       Writer.commit(repo_id, prepared)
     end
+  end
+
+  # A name Git cannot represent must never reach the log: it would be applied
+  # by nobody, and every replica would fail to converge on it forever.
+  defp check_ref_names(commands) do
+    commands |> Enum.map(& &1.ref) |> Micelio.Git.Ref.validate()
   end
 
   defp check_fast_forward(index, commands) do
@@ -207,8 +221,20 @@ defmodule Micelio.Ingest do
          {:ok, index, _etag} <- WAL.fetch(repo_id),
          {:ok, packs} <- pack_new_objects(repo_id, view.path, commands, index),
          {:ok, result} <- append(repo_id, commands, packs, Keyword.get(opts, :actor, %V1.Actor{})) do
-      Git.update_refs(view.path, commands)
-      Replica.record_local_push(repo_id, result.epoch, result.seq)
+      # The write is durable the moment the log accepted it, so a failure to
+      # apply it locally cannot fail the call. It does mean this node is behind,
+      # though, so its position is deliberately not recorded — the next read
+      # re-reads the log and converges rather than believing it is current.
+      case Git.update_refs(view.path, commands) do
+        :ok ->
+          Replica.record_local_push(repo_id, result.epoch, result.seq)
+
+        {:error, reason} ->
+          Logger.error(
+            "#{repo_id} committed seq #{result.seq} but could not apply it locally: #{inspect(reason)}"
+          )
+      end
+
       Cluster.announce(repo_id, result.epoch, result.seq)
       {:ok, result}
     else
@@ -271,6 +297,8 @@ defmodule Micelio.Ingest do
     end
   end
 
+  defp classify(:writer_overloaded), do: :overloaded
+  defp classify({:invalid_ref, _}), do: :invalid_ref
   defp classify({:pack_failed, _}), do: :storage
   defp classify({:stale, _, _, _}), do: :non_fast_forward
   defp classify({:pack_upload_failed, _}), do: :storage
@@ -285,6 +313,14 @@ defmodule Micelio.Ingest do
     Fetch and rebase, then push again.
     """
     |> String.trim()
+  end
+
+  defp message({:invalid_ref, ref}) do
+    "micelio: #{inspect(ref)} is not a valid reference name"
+  end
+
+  defp message(:writer_overloaded) do
+    "micelio: too many pushes are queued for this repository; please retry"
   end
 
   defp message(:cas_exhausted) do

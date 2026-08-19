@@ -26,10 +26,17 @@ defmodule Micelio.HTTP.GitBackend do
   It is the kind of bug that hides on loopback, where curl's short wait expires
   and it sends anyway, and appears the moment a proxy sits in the path.
 
-  Buffering costs nothing in practice because the two directions are never
-  large at the same time: `upload-pack` receives a tiny request and produces a
-  huge response, and `receive-pack` receives a huge request and produces a tiny
-  report. Only the small side is ever held.
+  In normal traffic the two directions are never large at once — `upload-pack`
+  receives a tiny request and produces a huge response, `receive-pack` the
+  reverse — so only the small side is ever held. That is a property of
+  well-behaved clients, though, not of the protocol: a client can send a
+  request that makes `upload-pack` produce gigabytes and then simply keep its
+  request body open, and the buffer would grow for as long as it cared to wait.
+
+  So the buffer is capped. Past `@max_buffered` bytes the response is started
+  and output streams from then on, which is safe precisely because a client
+  that has already made the server produce that much output has plainly stopped
+  waiting for `100 Continue`.
 
   A client that disconnects mid-clone, or a handler that crashes, takes the
   `git` process with it via `Micelio.Git.terminate/1`. Leaked `upload-pack`
@@ -45,6 +52,11 @@ defmodule Micelio.HTTP.GitBackend do
   @read_chunk 64 * 1024
   @idle_timeout :timer.minutes(30)
 
+  # How much output may be held before the response is started regardless. A
+  # well-behaved request never comes close; a hostile one is capped here rather
+  # than by the node's memory.
+  @max_buffered 4 * 1024 * 1024
+
   @doc """
   Run `git <args>` against `repo_path`, streaming `conn`'s body in and the
   process output back as the response.
@@ -58,8 +70,8 @@ defmodule Micelio.HTTP.GitBackend do
     port = Git.stream(repo_path, args, env: env)
 
     result =
-      case pump_request(conn, port, []) do
-        {:ok, conn, buffered} ->
+      case pump_request(conn, port, {[], 0}) do
+        {:ok, conn, {buffered, _bytes}} ->
           buffered = Enum.reverse(buffered)
 
           conn =
@@ -137,18 +149,23 @@ defmodule Micelio.HTTP.GitBackend do
   # Read the request body in chunks, writing each to the process and collecting
   # whatever it has produced so far. Reading the body is also what makes the
   # server emit `100 Continue`, which is why it happens before any response.
-  defp pump_request(conn, port, buffered) do
+  defp pump_request(conn, port, acc) do
     case read_body(conn, length: @read_chunk, read_length: @read_chunk) do
       {:more, chunk, conn} ->
         Port.command(port, chunk)
-        pump_request(conn, port, collect_available(port, buffered))
+
+        case collect_available(port, acc) do
+          {:cont, acc} -> pump_request(conn, port, acc)
+          {:full, acc} -> {:ok, conn, acc}
+        end
 
       {:ok, chunk, conn} ->
         if chunk != "", do: Port.command(port, chunk)
         # `--stateless-rpc` frames a request with a flush packet, which the
         # client has now sent, so the process can proceed without seeing EOF —
         # which a port cannot signal anyway.
-        {:ok, conn, collect_available(port, buffered)}
+        {_state, acc} = collect_available(port, acc)
+        {:ok, conn, acc}
 
       {:error, reason} ->
         {:error, conn, {:request_body, reason}}
@@ -156,12 +173,17 @@ defmodule Micelio.HTTP.GitBackend do
   end
 
   # Non-blocking: take whatever the process has already written so its pipe
-  # cannot fill while we are still feeding it.
-  defp collect_available(port, buffered) do
-    receive do
-      {^port, {:data, data}} -> collect_available(port, [data | buffered])
-    after
-      0 -> buffered
+  # cannot fill while we are still feeding it. Stops accumulating once the cap
+  # is reached, so the caller starts the response and streams the rest.
+  defp collect_available(port, {buffered, bytes} = acc) do
+    if bytes >= @max_buffered do
+      {:full, acc}
+    else
+      receive do
+        {^port, {:data, data}} -> collect_available(port, {[data | buffered], bytes + byte_size(data)})
+      after
+        0 -> {:cont, acc}
+      end
     end
   end
 

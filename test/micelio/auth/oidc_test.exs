@@ -106,6 +106,49 @@ defmodule Micelio.Auth.OIDCTest do
     end
   end
 
+  describe "failing closed" do
+    # Each of these was accepted before. The existing tests could not catch any
+    # of them, because the signing helper injects exp, iss and aud into every
+    # token — so the suite only ever exercised the paths where the claims are
+    # present and correct.
+
+    test "a signed token with no expiry is refused", %{jwk: jwk, config: config} do
+      # Otherwise it is a permanent credential: it cannot age out, and the only
+      # way to withdraw it is to rotate the issuer's key for everyone.
+      token = sign(jwk, %{"exp" => nil})
+
+      assert {:error, :missing_expiry} = OIDC.authenticate({:bearer, token}, config)
+    end
+
+    test "a non-numeric expiry is refused rather than ignored", %{jwk: jwk, config: config} do
+      token = sign(jwk, %{"exp" => "soon"})
+
+      assert {:error, :missing_expiry} = OIDC.authenticate({:bearer, token}, config)
+    end
+
+    test "no configured issuer refuses every token", %{jwk: jwk, config: config} do
+      # Accepting any issuer because none was configured leaves only the key
+      # source between an attacker and a session.
+      config = Keyword.delete(config, :issuer)
+
+      assert {:error, :no_issuer_configured} = OIDC.authenticate({:bearer, sign(jwk, %{})}, config)
+    end
+
+    test "no configured audience refuses every token", %{jwk: jwk, config: config} do
+      # This is the check that stops a token minted for another service sharing
+      # the issuer being replayed here, so it cannot be skipped by omission.
+      config = Keyword.delete(config, :audience)
+
+      assert {:error, :no_audience_configured} = OIDC.authenticate({:bearer, sign(jwk, %{})}, config)
+    end
+
+    test "a deployment with no audience must say so explicitly", %{jwk: jwk, config: config} do
+      config = config |> Keyword.delete(:audience) |> Keyword.put(:audience_optional, true)
+
+      assert {:ok, _principal} = OIDC.authenticate({:bearer, sign(jwk, %{})}, config)
+    end
+  end
+
   describe "time" do
     test "an expired token is rejected", %{jwk: jwk, config: config} do
       token = sign(jwk, %{"exp" => System.system_time(:second) - 3600})

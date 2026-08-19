@@ -70,6 +70,40 @@ defmodule Micelio.WALFailureTest do
     end
   end
 
+  describe "an ambiguous compare-and-swap" do
+    test "a commit whose response was lost is reported as committed, not rejected", %{repo: repo} do
+      {:ok, _} = WAL.create(repo)
+
+      # The exact shape of a lost response: the store commits the write and
+      # then answers the *retry* with a precondition failure, which is
+      # indistinguishable from losing the race to another writer. Reporting
+      # that as a rejection tells a client its push failed while the log has
+      # already accepted it — the one outcome a write-ahead log must not have.
+      committed = :counters.new(1, [])
+
+      stub(ObjectStore, :put, fn key, body, opts ->
+        cas? = String.ends_with?(key, "index.pb") and Keyword.has_key?(opts, :if_match)
+
+        if cas? and :counters.get(committed, 1) == 0 do
+          :counters.add(committed, 1, 1)
+          # Apply the write, then claim it failed.
+          Mimic.call_original(ObjectStore, :put, [key, body, Keyword.delete(opts, :if_match)])
+          {:error, :precondition_failed}
+        else
+          Mimic.call_original(ObjectStore, :put, [key, body, opts])
+        end
+      end)
+
+      assert {:ok, result} = WAL.append(repo, fn _index -> {:ok, push_entry()} end)
+
+      assert result.seq == 1
+
+      {:ok, index, _etag} = WAL.fetch(repo)
+      assert index.seq == 1, "the entry must be installed exactly once"
+      assert length(index.entries) == 1
+    end
+  end
+
   describe "storage failures" do
     test "a failed index write is reported, not swallowed", %{repo: repo} do
       {:ok, _} = WAL.create(repo)

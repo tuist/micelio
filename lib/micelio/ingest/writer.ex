@@ -69,6 +69,17 @@ defmodule Micelio.Ingest.Writer do
   @registry Micelio.WriterRegistry
   @supervisor Micelio.WriterSupervisor
 
+  # How many pushes may be waiting on one repository's writer.
+  #
+  # Group commit means a healthy writer drains whatever has arrived in a single
+  # round trip, so this is never reached in normal operation. It is reached
+  # when the object store stalls: the writer blocks in one batch for minutes
+  # while every subsequent push queues behind it, and without a limit the queue
+  # is bounded only by how fast clients can push. Refusing is better than
+  # queueing indefinitely — a client told to retry will, and a client whose
+  # request is silently held for four minutes has already given up.
+  @max_queued 256
+
   @type prepared :: WAL.prepared()
 
   @doc """
@@ -176,16 +187,21 @@ defmodule Micelio.Ingest.Writer do
   @impl true
   def init({repo_id, overrides}) do
     if map_size(overrides) > 0, do: Micelio.Config.put_overrides(overrides)
-    {:ok, %{repo_id: repo_id, pending: [], last_batch_size: 0}}
+    {:ok, %{repo_id: repo_id, pending: [], queued: 0, last_batch_size: 0}}
   end
 
   @impl true
   def handle_call({:commit, prepared}, from, state) do
-    # Queue and return without replying. The reply comes after the batch this
-    # request lands in has been committed.
-    state = %{state | pending: [{from, prepared} | state.pending]}
-    if length(state.pending) == 1, do: send(self(), :flush)
-    {:noreply, state}
+    if state.queued >= @max_queued do
+      :telemetry.execute([:micelio, :push, :rejected], %{}, %{repo_id: state.repo_id, reason: :overloaded})
+      {:reply, {:error, :writer_overloaded}, state}
+    else
+      # Queue and return without replying. The reply comes after the batch this
+      # request lands in has been committed.
+      state = %{state | pending: [{from, prepared} | state.pending], queued: state.queued + 1}
+      if state.queued == 1, do: send(self(), :flush)
+      {:noreply, state}
+    end
   end
 
   def handle_call(:last_batch_size, _from, state), do: {:reply, state.last_batch_size, state}
@@ -212,7 +228,7 @@ defmodule Micelio.Ingest.Writer do
     # No re-arming needed. Requests that arrived during the commit are still
     # sitting in the mailbox as calls, and the first one handled will find an
     # empty queue and schedule the next flush itself.
-    {:noreply, %{state | pending: [], last_batch_size: length(batch)}}
+    {:noreply, %{state | pending: [], queued: 0, last_batch_size: length(batch)}}
   end
 
   def handle_info(_message, state), do: {:noreply, state}

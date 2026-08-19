@@ -10,6 +10,17 @@ defmodule Micelio.Auth.Webhook do
   The cache is deliberately short-lived and keyed by a hash of the credential,
   never the credential itself, so a memory dump or a crash report does not hand
   over live tokens.
+
+  Two things about it are load-bearing rather than incidental:
+
+    * **Entries are evicted, not merely ignored.** An expired entry that stays
+      in the table is still memory, and a deployment authenticating a stream of
+      short-lived tokens would accumulate one row per credential it ever saw
+      until the node died. Expiry is enforced by sweeping, with a hard cap as a
+      backstop.
+    * **The key includes the authority.** Hashing the credential alone means
+      that after a configuration change, a token the previous authority
+      accepted keeps being honoured by a node now pointed at a different one.
   """
 
   @behaviour Micelio.Auth
@@ -44,7 +55,7 @@ defmodule Micelio.Auth.Webhook do
 
   def authenticate(credential, config) do
     token = token_of(credential)
-    key = :crypto.hash(:sha256, token)
+    key = cache_key(token, config)
 
     case cached(key, config) do
       {:ok, principal} -> {:ok, principal}
@@ -54,6 +65,18 @@ defmodule Micelio.Auth.Webhook do
 
   defp token_of({:bearer, token}), do: token
   defp token_of({:basic, user, password}), do: user <> ":" <> password
+
+  # The authority is part of the key, so a node repointed at a different one
+  # cannot serve its predecessor's decisions.
+  defp cache_key(token, config) do
+    :crypto.hash(:sha256, [
+      token,
+      0,
+      to_string(Keyword.get(config, :endpoint, "")),
+      0,
+      to_string(Keyword.get(config, :token, ""))
+    ])
+  end
 
   defp cached(key, config) do
     ttl = Keyword.get(config, :cache_ttl_ms, 30_000)
@@ -65,10 +88,33 @@ defmodule Micelio.Auth.Webhook do
 
       _ ->
         case :ets.lookup(@table, key) do
-          [{^key, principal, at}] when now - at < ttl -> {:ok, principal}
-          _ -> :miss
+          [{^key, principal, at}] when now - at < ttl ->
+            {:ok, principal}
+
+          [{^key, _principal, _at}] ->
+            # Expired. Delete rather than leave it: an entry nobody will use
+            # again is pure memory, and there is one per credential ever seen.
+            :ets.delete(@table, key)
+            :miss
+
+          [] ->
+            :miss
         end
     end
+  end
+
+  # Entries are only reachable through their own credential, so nothing sweeps
+  # them on its own. Sweeping on insert keeps the cost proportional to traffic,
+  # and the cap bounds the table even against a flood of distinct credentials.
+  @max_entries 10_000
+
+  defp evict_expired(config) do
+    ttl = Keyword.get(config, :cache_ttl_ms, 30_000)
+    cutoff = System.monotonic_time(:millisecond) - ttl
+
+    :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
+
+    if :ets.info(@table, :size) > @max_entries, do: :ets.delete_all_objects(@table)
   end
 
   defp resolve(key, token, config) do
@@ -83,8 +129,10 @@ defmodule Micelio.Auth.Webhook do
       {:ok, %{status: 200, body: body}} ->
         principal = build(body)
 
-        if :ets.whereis(@table) != :undefined,
-          do: :ets.insert(@table, {key, principal, System.monotonic_time(:millisecond)})
+        if :ets.whereis(@table) != :undefined do
+          evict_expired(config)
+          :ets.insert(@table, {key, principal, System.monotonic_time(:millisecond)})
+        end
 
         {:ok, principal}
 

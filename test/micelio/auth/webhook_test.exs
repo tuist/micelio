@@ -138,6 +138,49 @@ defmodule Micelio.Auth.WebhookTest do
     end
   end
 
+  describe "cache hygiene" do
+    # The cache used to insert and never delete, so a deployment authenticating
+    # a stream of short-lived tokens accumulated one row per credential it had
+    # ever seen. The existing tests could not catch it: they proved a second
+    # lookup avoids a call, which stays true while the table grows forever.
+
+    test "an expired entry is deleted rather than left behind" do
+      config = [endpoint: "https://auth.example.com/verify", token: "s", cache_ttl_ms: 0]
+      token = "expiring-#{:erlang.unique_integer([:positive])}"
+
+      stub(Req, :post, fn _url, _opts -> {:ok, %Req.Response{status: 200, body: %{"subject" => "a"}}} end)
+
+      assert {:ok, _} = Webhook.authenticate({:bearer, token}, config)
+      before = :ets.info(Micelio.Auth.Webhook.Cache, :size)
+
+      # A second, different credential sweeps the first one out on insert.
+      assert {:ok, _} = Webhook.authenticate({:bearer, token <> "-other"}, config)
+
+      assert :ets.info(Micelio.Auth.Webhook.Cache, :size) <= before + 1,
+             "expired entries must be evicted, not merely ignored"
+    end
+
+    test "a token accepted by one authority is not served for another" do
+      # After a configuration change the same credential must be re-verified
+      # against the new authority rather than answered from cache.
+      token = "shared-#{:erlang.unique_integer([:positive])}"
+      seen = :counters.new(1, [])
+
+      stub(Req, :post, fn _url, opts ->
+        :counters.add(seen, 1, 1)
+        {:ok, %Req.Response{status: 200, body: %{"subject" => Keyword.fetch!(opts, :headers) |> inspect()}}}
+      end)
+
+      a = [endpoint: "https://a.example.com/verify", token: "secret-a", cache_ttl_ms: 60_000]
+      b = [endpoint: "https://b.example.com/verify", token: "secret-b", cache_ttl_ms: 60_000]
+
+      assert {:ok, _} = Webhook.authenticate({:bearer, token}, a)
+      assert {:ok, _} = Webhook.authenticate({:bearer, token}, b)
+
+      assert :counters.get(seen, 1) == 2, "the second authority must be consulted"
+    end
+  end
+
   describe "caching" do
     test "a repeat verification within the TTL does not call the authority twice" do
       config = [endpoint: "https://auth.example.com/verify", token: "s", cache_ttl_ms: 60_000]

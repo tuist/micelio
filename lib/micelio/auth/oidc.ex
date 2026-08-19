@@ -46,8 +46,6 @@ defmodule Micelio.Auth.OIDC do
 
   @behaviour Micelio.Auth
 
-  require Logger
-
   alias Micelio.Auth.Principal
 
   @impl true
@@ -100,24 +98,31 @@ defmodule Micelio.Auth.OIDC do
     end
   end
 
+  # An absent `exp` is rejected, not ignored. A signed token with no expiry is
+  # a permanent credential: it cannot be aged out, and the only way to withdraw
+  # it is to rotate the issuer's signing key for everyone. Treating "no expiry
+  # stated" as "never expires" turns a compromised or over-generous issuer into
+  # indefinite access.
   defp check_time(claims, now, leeway) do
     exp = claims["exp"]
     nbf = claims["nbf"]
 
     cond do
-      is_number(exp) and now > exp + leeway -> {:error, :expired}
+      not is_number(exp) -> {:error, :missing_expiry}
+      now > exp + leeway -> {:error, :expired}
       is_number(nbf) and now < nbf - leeway -> {:error, :not_yet_valid}
       true -> :ok
     end
   end
 
+  # Fails closed. Accepting any issuer because none was configured means the
+  # only thing standing between an attacker and a valid session is which keys
+  # happen to be in the key source — which is a property of configuration, not
+  # a decision anyone made.
   defp check_issuer(claims, config) do
     case expected_issuer(config) do
-      nil ->
-        :ok
-
-      issuer ->
-        if claims["iss"] == issuer, do: :ok, else: {:error, {:issuer_mismatch, claims["iss"]}}
+      nil -> {:error, :no_issuer_configured}
+      issuer -> if claims["iss"] == issuer, do: :ok, else: {:error, {:issuer_mismatch, claims["iss"]}}
     end
   end
 
@@ -140,18 +145,27 @@ defmodule Micelio.Auth.OIDC do
     end
   end
 
+  # Also fails closed, and this is the check that stops a token minted for
+  # another service sharing the issuer from being replayed here. A warning was
+  # not enough: nobody reads a warning that arrives on every successful
+  # request, and the consequence of missing it is that every audience is
+  # accepted. Deployments that genuinely have no audience to bind to must say
+  # so, by setting `audience_optional`.
   defp check_audience(claims, config) do
-    expected = Keyword.get(config, :audience)
+    case Keyword.get(config, :audience) do
+      audience when is_binary(audience) and audience != "" ->
+        if audience in List.wrap(claims["aud"]) do
+          :ok
+        else
+          {:error, {:audience_mismatch, claims["aud"]}}
+        end
 
-    if is_nil(expected) do
-      # Refusing to run without an audience would be inconvenient for a
-      # single-tenant issuer, but running silently without one is how tokens
-      # end up replayable, so say so loudly instead.
-      Logger.warning("micelio: OIDC audience is not configured; tokens are not bound to this deployment")
-      :ok
-    else
-      audiences = List.wrap(claims["aud"])
-      if expected in audiences, do: :ok, else: {:error, {:audience_mismatch, claims["aud"]}}
+      _ ->
+        if Keyword.get(config, :audience_optional, false) do
+          :ok
+        else
+          {:error, :no_audience_configured}
+        end
     end
   end
 

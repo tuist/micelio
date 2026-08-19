@@ -95,10 +95,22 @@ git receive-pack
       └─ refs applied, client acknowledged
 ```
 
-Nothing is acknowledged before step 3 succeeds. The ordering is the wrong way
-round to lose data: the log can briefly hold a push whose local ref update then
-failed — and a replica will happily converge on it — but a client can never be
-told "yes" for something the log does not have.
+Nothing is acknowledged before step 3 succeeds, so a client is never told "yes"
+for something the log does not have. The converse is not true, and it is worth
+being precise about rather than glossing:
+
+**A push can be reported as rejected and still be committed.** Two windows
+produce it. If the store commits the index write and the response is lost, the
+node cannot tell that from losing the race — so the entry's content address is
+checked on retry, and an entry already installed is reported as the success it
+was. If the hook returns success but `receive-pack` then fails to install refs
+locally, the log has the push and this node does not; every other replica makes
+it visible, and this one converges on its next read.
+
+So the honest statement of the contract is *log-first*: the log decides, and a
+hook failure means "this node did not commit it", not "it never happened". No
+sequence loses a push or produces a ref value neither client asked for, but a
+client can see a failure for a push that landed. Recovering is a fetch.
 
 ### Why this is linearizable without consensus
 

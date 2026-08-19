@@ -19,11 +19,17 @@ defmodule Micelio.Git.Hooks do
   proposed `old` values are now stale — the hook exits non-zero, Git discards
   the quarantine, and the client is told to fetch and retry.
 
-  Nothing is ever acknowledged to a client before it is in the log. The
-  ordering is the wrong way round to lose data: the log can briefly contain a
-  push whose local ref update then failed, and a replica will happily converge
-  on it, but a client can never be told "yes" for something the log does not
-  have.
+  Nothing is acknowledged to a client before it is in the log, so a client is
+  never told "yes" for something the log does not have.
+
+  The converse can happen and is worth stating plainly: a push may be reported
+  as rejected and still be committed, either because the compare-and-swap
+  succeeded and its response was lost, or because this node failed to install
+  the refs after the log accepted them. `Micelio.WAL` closes the first window
+  by recognising its own entry on retry; the second leaves this node behind
+  until its next read, while other replicas serve the push normally. The
+  contract is log-first: a hook failure means this node did not commit it, not
+  that it never happened.
 
   The hook is a shell script rather than anything cleverer because it runs in
   Git's process, not ours, and the only contract that matters is its exit code.
