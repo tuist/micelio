@@ -37,12 +37,19 @@ service account token is already an OIDC JWT the cluster will vouch for, so an
 agent authenticates with a credential it was born with, and nothing has to be
 created, distributed or rotated. See [kubernetes.md](kubernetes.md).
 
-### Multiple issuers, one deployment
+### One issuer per deployment (today)
 
-For several tenants bringing their own identity providers, configure an issuer
-per account. Each token is verified against its own account's issuer, and the
-`aud` check keeps a token from one tenant's provider from being replayed
-against another's repositories.
+A deployment verifies against a single issuer. That covers the common shapes —
+one company's IdP, or a Kubernetes cluster vouching for its own pods — and
+tenants are then separated by subject, through namespace grants or policy
+bindings.
+
+**Tenants bringing their own identity providers is not implemented.** It is not
+a large change: the key id in a token already selects which signing key
+verifies it, so a set of issuers could be tried by `kid` and the `iss` claim
+checked against whichever one owned that key. But it does not exist, and until
+it does, every tenant on a deployment must authenticate through the same
+issuer.
 
 ## Authorization: data, not a service
 
@@ -99,7 +106,16 @@ window — and still far tighter than the token lifetime it replaces.
 **Namespace isolation: yes.** Repository ids, storage keys and policy are all
 account-scoped, and a repository the caller may not read is reported as *not
 found* rather than *forbidden*, so the shape of one tenant's estate is not
-discoverable by another.
+discoverable by another. Verified on a cluster: a pod in one namespace cannot
+reach another namespace's repositories, and is told they do not exist.
+
+**Account ownership: not modelled.** There is no registry of which tenant owns
+which account name. An account exists because a repository was created under
+it, and whoever holds a grant matching `name/**` can do that. Within one
+company that is fine — grants come from your IdP or your policy, and neither
+hands out patterns carelessly. For a product where tenants sign themselves up,
+it is a gap: nothing stops a tenant whose grants are broad from claiming a name
+that should belong to someone else, and nothing records who claimed it.
 
 **Credential isolation: yes.** Tokens are audience-bound to this deployment and
 verified against the issuer configured for the account.
@@ -116,9 +132,13 @@ disk that other tenants are also using. What exists today:
 - Compaction is threshold-driven, so an idle tenant never pays for it.
 
 What does not exist: per-tenant request quotas, per-tenant bandwidth limits,
-and per-tenant CPU confinement. For hostile multi-tenancy those are needed, and
-the natural place for them is the same one everything else uses — a quota
-object per account, read the same way. That is not implemented.
+and per-tenant CPU confinement. `Micelio.Git.run_supervised/3` accepts a cgroup
+to confine a command to, which is the hook a CPU limit would hang off, but
+nothing passes one today.
+
+For hostile multi-tenancy those are needed, and the natural place for them is
+the same one everything else uses — a quota object per account, read the same
+way. That is not implemented either.
 
 **Storage isolation at the bucket level: not implemented.** Every tenant shares
 one bucket under separate prefixes. Per-tenant buckets or per-tenant KMS keys
