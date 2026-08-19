@@ -22,6 +22,20 @@ defmodule Micelio.ObjectStore.S3 do
 
   @behaviour Micelio.ObjectStore
 
+  # Chunk size for streamed uploads. Large enough that the per-chunk overhead
+  # is irrelevant, small enough that memory stays flat regardless of the file.
+  @chunk 1024 * 1024
+
+  @doc """
+  The largest object a single upload can carry.
+
+  S3 refuses a `PUT` over five gibibytes; beyond that a multipart upload is
+  required, which is not implemented. A pack larger than this fails loudly at
+  the point of upload rather than being silently truncated.
+  """
+  @spec max_object_size() :: pos_integer()
+  def max_object_size, do: 5 * 1024 * 1024 * 1024
+
   @impl true
   def get(key, opts, config) do
     headers =
@@ -61,6 +75,81 @@ defmodule Micelio.ObjectStore.S3 do
         {:error, {:unexpected_status, resp.status, body_excerpt(resp)}}
 
       {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
+  def put_file(key, source, opts, config) do
+    case File.stat(source) do
+      {:ok, %{size: size}} when size > 5 * 1024 * 1024 * 1024 ->
+        # S3 rejects this with an opaque `EntityTooLarge`. Naming the limit
+        # here means an operator reading the log learns what to do about it.
+        {:error, {:object_too_large, key, size, max_object_size()}}
+
+      {:ok, %{size: size}} ->
+        headers =
+          [{"content-length", Integer.to_string(size)}]
+          |> maybe_header("if-match", Keyword.get(opts, :if_match))
+          |> maybe_header("if-none-match", Keyword.get(opts, :if_none_match))
+          |> maybe_header("content-type", Keyword.get(opts, :content_type, "application/octet-stream"))
+
+        # An enumerable body makes Req sign with UNSIGNED-PAYLOAD, which is why
+        # content-length has to be explicit. The payload is therefore not
+        # covered by the signature, so the transport has to be — use HTTPS for
+        # anything but a local store.
+        options = [
+          headers: headers,
+          body: File.stream!(source, @chunk),
+          decode_body: false,
+          # Not retried: the body is a stream and cannot be replayed, and a
+          # half-sent object is worse than a reported failure the caller
+          # retries from the start.
+          retry: false
+        ]
+
+        case request(:put, key, config, options) do
+          {:ok, %{status: status} = resp} when status in 200..299 -> {:ok, etag(resp)}
+          {:ok, %{status: status}} when status in [409, 412] -> {:error, :precondition_failed}
+          {:ok, resp} -> {:error, {:unexpected_status, resp.status, body_excerpt(resp)}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
+  def get_file(key, destination, _opts, config) do
+    File.mkdir_p!(Path.dirname(destination))
+    partial = destination <> ".partial"
+
+    # Written to a temporary name and renamed, so an interrupted download can
+    # never be mistaken for a complete object by whatever reads it next.
+    result =
+      request(:get, key, config,
+        into: File.stream!(partial),
+        decode_body: false,
+        retry: :safe_transient,
+        max_retries: 2
+      )
+
+    case result do
+      {:ok, %{status: 200}} ->
+        File.rename!(partial, destination)
+        {:ok, File.stat!(destination).size}
+
+      {:ok, %{status: 404}} ->
+        File.rm(partial)
+        {:error, :not_found}
+
+      {:ok, resp} ->
+        File.rm(partial)
+        {:error, {:unexpected_status, resp.status, ""}}
+
+      {:error, reason} ->
+        File.rm(partial)
         {:error, reason}
     end
   end

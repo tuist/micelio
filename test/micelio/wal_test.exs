@@ -1,9 +1,14 @@
 defmodule Micelio.WALTest do
   use Micelio.Case, async: true
+  use Mimic
 
+  alias Micelio.ObjectStore
   alias Micelio.WAL
   alias Micelio.WAL.Entry
   alias Micelio.WAL.Index
+
+  setup :set_mimic_private
+  setup :verify_on_exit!
 
   defp push_entry(ref, old, new) do
     Entry.new(type: :ENTRY_TYPE_PUSH, commands: [Entry.command(ref, old, new)])
@@ -218,6 +223,49 @@ defmodule Micelio.WALTest do
 
     assert {:ok, ids} = WAL.list_repositories()
     assert ids == ["acme/one", "acme/two", "beta/three"]
+  end
+
+  describe "packs" do
+    @tag :tmp_dir
+    test "never pass through the buffering object-store API", %{repo: repo, tmp_dir: tmp} do
+      {:ok, _} = WAL.create(repo)
+
+      pack = Path.join(tmp, "pack-big.pack")
+      bytes = :crypto.strong_rand_bytes(2 * 1024 * 1024)
+      File.write!(pack, bytes)
+
+      # A repository's pack is as large as a customer's history, so buffering
+      # one makes this node's memory ceiling somebody else's decision. Measuring
+      # memory to catch that is unreliable (the binary is freed before it can
+      # be sampled), so the property is asserted directly: the pack path must
+      # use the streaming calls and nothing else.
+      Mimic.reject(&ObjectStore.put/3)
+      Mimic.reject(&ObjectStore.get/2)
+
+      assert {:ok, descriptor} = WAL.put_pack(repo, pack)
+      assert descriptor.size == byte_size(bytes)
+      assert descriptor.digest == WAL.digest(bytes)
+
+      assert {:ok, file} = WAL.get_pack(repo, descriptor, Path.join(tmp, "out"))
+      assert File.read!(file) == bytes
+    end
+
+    test "round-trip through the store preserves the bytes exactly", %{repo: repo} do
+      {:ok, _} = WAL.create(repo)
+      dir = Path.join(System.tmp_dir!(), "micelio-pack-#{:erlang.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      source = Path.join(dir, "pack-roundtrip.pack")
+      bytes = :crypto.strong_rand_bytes(3 * 1024 * 1024 + 7)
+      File.write!(source, bytes)
+
+      {:ok, descriptor} = WAL.put_pack(repo, source)
+
+      destination = Path.join(dir, "downloaded")
+      assert {:ok, file} = WAL.get_pack(repo, descriptor, destination)
+      assert File.read!(file) == bytes
+
+      File.rm_rf(dir)
+    end
   end
 
   test "destroy/1 removes everything belonging to a repository", %{repo: repo} do

@@ -19,6 +19,9 @@ defmodule Micelio.Telemetry do
     * `[:micelio, :wal, :append]` — `seq`, `attempts`, meta `repo_id`
     * `[:micelio, :wal, :cas_retry]` — a push lost a compare-and-swap
     * `[:micelio, :wal, :compact]` — `epoch`, `packs`
+    * `[:micelio, :wal, :pack_upload]` / `[:micelio, :wal, :pack_download]` —
+      `bytes`, meta `repo_id`. Packs stream to and from the store, so these
+      count bytes moved, not memory held.
     * `[:micelio, :replica, :sync]` — `duration_ms`, `packs_downloaded`,
       `entries_behind`
     * `[:micelio, :replica, :evict]`

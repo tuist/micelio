@@ -181,8 +181,14 @@ defmodule Micelio.WALFailureTest do
         digest: WAL.digest("good")
       }
 
-      stub(ObjectStore, :get, fn key -> ObjectStore.get(key, []) end)
-      stub(ObjectStore, :get, fn _key, _opts -> {:ok, "evil", ~s("etag")} end)
+      # The pack streams straight to disk, so a corrupt transfer is a corrupt
+      # file: the check has to happen after the write, and the bad file has to
+      # be removed before anyone can mistake it for a verified one.
+      stub(ObjectStore, :get_file, fn _key, destination ->
+        File.mkdir_p!(Path.dirname(destination))
+        File.write!(destination, "evil")
+        {:ok, 4}
+      end)
 
       assert {:error, {:pack_digest_mismatch, _}} = WAL.get_pack(repo, pack, dir)
       refute File.exists?(Path.join(dir, "pack-abc.pack"))

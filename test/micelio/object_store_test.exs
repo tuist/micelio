@@ -81,6 +81,58 @@ defmodule Micelio.ObjectStoreTest do
     refute "other/c" in keys
   end
 
+  describe "streaming" do
+    @tag :tmp_dir
+    test "a file round trips without being read into a binary", %{tmp_dir: tmp} do
+      source = Path.join(tmp, "source.bin")
+      bytes = :crypto.strong_rand_bytes(1024 * 1024 + 13)
+      File.write!(source, bytes)
+
+      assert {:ok, _etag} = ObjectStore.put_file("big/object", source)
+      assert {:ok, ^bytes, _etag} = ObjectStore.get("big/object")
+
+      destination = Path.join(tmp, "nested/destination.bin")
+      assert {:ok, size} = ObjectStore.get_file("big/object", destination)
+      assert size == byte_size(bytes)
+      assert File.read!(destination) == bytes
+    end
+
+    @tag :tmp_dir
+    test "put_file honours if_none_match, so a re-upload cannot overwrite", %{tmp_dir: tmp} do
+      first = Path.join(tmp, "first.bin")
+      second = Path.join(tmp, "second.bin")
+      File.write!(first, "original")
+      File.write!(second, "replacement")
+
+      assert {:ok, _} = ObjectStore.put_file("immutable", first, if_none_match: "*")
+      assert {:error, :precondition_failed} = ObjectStore.put_file("immutable", second, if_none_match: "*")
+      assert {:ok, "original", _} = ObjectStore.get("immutable")
+    end
+
+    @tag :tmp_dir
+    test "a failed put_file leaves nothing behind", %{tmp_dir: tmp} do
+      assert {:error, :enoent} = ObjectStore.put_file("absent", Path.join(tmp, "missing.bin"))
+      assert {:error, :not_found} = ObjectStore.get("absent")
+    end
+
+    test "get_file reports a missing object rather than creating an empty one" do
+      destination = Path.join(System.tmp_dir!(), "micelio-absent-#{:erlang.unique_integer([:positive])}")
+      assert {:error, :not_found} = ObjectStore.get_file("no/such/key", destination)
+      refute File.exists?(destination)
+    end
+
+    @tag :tmp_dir
+    test "digest_file agrees with hashing the whole body", %{tmp_dir: tmp} do
+      path = Path.join(tmp, "hash.bin")
+      bytes = :crypto.strong_rand_bytes(700 * 1024)
+      File.write!(path, bytes)
+
+      expected = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+      assert {:ok, ^expected, size} = ObjectStore.digest_file(path)
+      assert size == byte_size(bytes)
+    end
+  end
+
   test "delete/1 is idempotent" do
     ObjectStore.put("gone", "x")
     assert :ok = ObjectStore.delete("gone")

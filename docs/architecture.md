@@ -61,6 +61,31 @@ bodies then exist purely for audit — which is what they are actually for.
 
 Together: catching up costs **one read**.
 
+### Packs
+
+Packfiles are the only objects whose size is chosen by somebody else. A
+repository's pack is as large as its history, so a node that buffered one would
+have a memory ceiling set by a customer's repository rather than by its own
+configuration — and the largest repository would decide how many replicas fit
+on a machine.
+
+So packs are never held whole. They are hashed in chunks off disk, uploaded as
+a stream, and downloaded straight into the file Git will read. Only the small
+protobuf objects — the index, entries, policy — go through the buffering
+`get`/`put` calls. `Micelio.WAL` uses `put_file`/`get_file` for anything pack
+shaped, and a test asserts that it never reaches for the buffering API, since
+this is the kind of property that quietly regresses.
+
+A download is written under a temporary name and renamed only after its digest
+matches what the log recorded, so a truncated transfer can never be mistaken
+for a verified pack.
+
+The remaining ceiling is S3's: a single `PUT` cannot exceed **5 GiB**, and
+multipart upload is not implemented. A repository whose pack exceeds that fails
+at upload rather than silently truncating. Compaction keeps the base pack at
+the size of the current tree rather than of all history, so reaching this needs
+a genuinely enormous single repository.
+
 ### Entries
 
 Immutable, and keyed by the hash of their own bytes. Writing one is therefore

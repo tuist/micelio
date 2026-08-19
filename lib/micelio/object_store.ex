@@ -43,6 +43,21 @@ defmodule Micelio.ObjectStore do
               {:ok, %{etag: etag(), size: non_neg_integer()}} | {:error, :not_found} | error()
 
   @doc """
+  Upload a local file without reading it into memory.
+
+  Packfiles are the only objects whose size is set by the user rather than by
+  us, and a repository's pack is as large as its history. Holding one in a
+  binary means a node's memory ceiling is a customer's repository size, which
+  is not a ceiling anyone can plan around.
+  """
+  @callback put_file(key(), Path.t(), [put_opt()], config :: keyword()) ::
+              {:ok, etag()} | {:error, :precondition_failed} | error()
+
+  @doc "Download an object straight to a local file, without buffering it."
+  @callback get_file(key(), Path.t(), opts :: keyword(), config :: keyword()) ::
+              {:ok, non_neg_integer()} | {:error, :not_found} | error()
+
+  @doc """
   Read an object.
 
   Pass `etag: previous` to make the read conditional; the reply is
@@ -63,6 +78,37 @@ defmodule Micelio.ObjectStore do
 
   @spec stat(key()) :: {:ok, %{etag: etag(), size: non_neg_integer()}} | {:error, :not_found} | error()
   def stat(key), do: dispatch(:stat, [key])
+
+  @doc "Upload a local file without reading it into memory."
+  @spec put_file(key(), Path.t(), [put_opt()]) :: {:ok, etag()} | {:error, :precondition_failed} | error()
+  def put_file(key, path, opts \\ []), do: dispatch(:put_file, [key, path, opts])
+
+  @doc "Download an object straight to a local file, without buffering it."
+  @spec get_file(key(), Path.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, :not_found} | error()
+  def get_file(key, path, opts \\ []), do: dispatch(:get_file, [key, path, opts])
+
+  @doc """
+  The SHA-256 of a local file, read in chunks.
+
+  Used to describe a pack in the log without ever holding it whole.
+  """
+  @spec digest_file(Path.t()) :: {:ok, String.t(), non_neg_integer()} | {:error, term()}
+  def digest_file(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} ->
+        digest =
+          path
+          |> File.stream!(256 * 1024)
+          |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+          |> :crypto.hash_final()
+          |> Base.encode16(case: :lower)
+
+        {:ok, digest, size}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   @doc "The backend module and configuration this node is running with."
   @spec backend() :: {module(), keyword()}

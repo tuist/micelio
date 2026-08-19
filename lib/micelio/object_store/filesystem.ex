@@ -50,6 +50,58 @@ defmodule Micelio.ObjectStore.Filesystem do
   end
 
   @impl true
+  def put_file(key, source, opts, config) do
+    Lock.transaction(fn ->
+      path = path_for(key, config)
+
+      case check_conditions(path, opts) do
+        :ok ->
+          File.mkdir_p!(Path.dirname(path))
+          tmp = path <> ".tmp-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+
+          # File.cp/2 copies in chunks, so the file never passes through a
+          # binary of its own size.
+          case File.cp(source, tmp) do
+            :ok ->
+              # Hashed from the stream, not from a re-read: the point of this
+              # path is that the file never becomes a binary of its own size.
+              etag = etag_for_file(tmp)
+              File.rename!(tmp, path)
+              {:ok, etag}
+
+            {:error, reason} ->
+              File.rm(tmp)
+              {:error, reason}
+          end
+
+        error ->
+          error
+      end
+    end)
+  end
+
+  @impl true
+  def get_file(key, destination, _opts, config) do
+    path = path_for(key, config)
+
+    case File.stat(path) do
+      {:ok, %{size: size}} ->
+        File.mkdir_p!(Path.dirname(destination))
+
+        case File.cp(path, destination) do
+          :ok -> {:ok, size}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :enoent} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def list(prefix, config) do
     root = root(config)
 
@@ -74,6 +126,14 @@ defmodule Micelio.ObjectStore.Filesystem do
       {:ok, body} -> {:ok, %{etag: etag_for(body), size: byte_size(body)}}
       {:error, :enoent} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp check_conditions(path, opts) do
+    current = File.read(path)
+
+    with :ok <- check_if_none_match(Keyword.get(opts, :if_none_match), current) do
+      check_if_match(Keyword.get(opts, :if_match), current)
     end
   end
 
@@ -111,6 +171,16 @@ defmodule Micelio.ObjectStore.Filesystem do
   defp check_if_match(_etag, _), do: {:error, :precondition_failed}
 
   defp etag_for(body), do: ~s("#{Base.encode16(:crypto.hash(:md5, body), case: :lower)}")
+
+  defp etag_for_file(path) do
+    hash =
+      path
+      |> File.stream!(256 * 1024)
+      |> Enum.reduce(:crypto.hash_init(:md5), &:crypto.hash_update(&2, &1))
+      |> :crypto.hash_final()
+
+    ~s("#{Base.encode16(hash, case: :lower)}")
+  end
 
   defp path_for(key, config), do: Path.join(root(config), key)
 

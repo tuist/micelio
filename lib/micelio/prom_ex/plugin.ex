@@ -85,6 +85,22 @@ defmodule Micelio.PromEx.Plugin do
         [:micelio, :wal, :compact, :count],
         event_name: [:micelio, :wal, :compact],
         description: "Compactions performed by this node."
+      ),
+      sum(
+        [:micelio, :wal, :pack_upload, :bytes],
+        event_name: [:micelio, :wal, :pack_upload],
+        measurement: :bytes,
+        unit: :byte,
+        description: "Packfile bytes streamed into the log. Object-store egress starts here."
+      ),
+      sum(
+        [:micelio, :wal, :pack_download, :bytes],
+        event_name: [:micelio, :wal, :pack_download],
+        measurement: :bytes,
+        unit: :byte,
+        description:
+          "Packfile bytes streamed out of the log to warm a replica. Sustained growth " <>
+            "means caches are being rebuilt more often than they are being used."
       )
     ])
   end

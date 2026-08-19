@@ -395,15 +395,21 @@ defmodule Micelio.WAL do
   Packs are content-addressed by Git itself, so a name collision means the same
   object set, and re-uploading is a no-op. `If-None-Match: *` makes that
   explicit: a precondition failure here is success.
+
+  The pack never passes through a binary of its own size: it is hashed in
+  chunks and uploaded as a stream. A repository's history is set by the
+  customer, so buffering one would make a node's memory ceiling somebody
+  else's repository.
   """
   @spec put_pack(repo_id(), Path.t()) :: {:ok, Entry.pack()} | {:error, term()}
   def put_pack(repo_id, pack_path) do
     name = Path.basename(pack_path)
-    body = File.read!(pack_path)
 
-    with {:ok, _} <- write_immutable(pack_key(repo_id, name), body),
+    with {:ok, digest, size} <- ObjectStore.digest_file(pack_path),
+         {:ok, _} <- stream_immutable(pack_key(repo_id, name), pack_path),
          :ok <- put_pack_index(repo_id, pack_path) do
-      {:ok, %Micelio.Wal.V1.Pack{key: pack_key(repo_id, name), size: byte_size(body), digest: digest(body)}}
+      :telemetry.execute([:micelio, :wal, :pack_upload], %{bytes: size}, %{repo_id: repo_id})
+      {:ok, %Micelio.Wal.V1.Pack{key: pack_key(repo_id, name), size: size, digest: digest}}
     end
   end
 
@@ -411,7 +417,7 @@ defmodule Micelio.WAL do
     idx = Path.rootname(pack_path) <> ".idx"
 
     if File.exists?(idx) do
-      with {:ok, _} <- write_immutable(pack_key(repo_id, Path.basename(idx)), File.read!(idx)), do: :ok
+      with {:ok, _} <- stream_immutable(pack_key(repo_id, Path.basename(idx)), idx), do: :ok
     else
       # Not fatal: a replica can rebuild the index locally with `index-pack`.
       :ok
@@ -421,9 +427,11 @@ defmodule Micelio.WAL do
   @doc """
   Download a pack (and its index when present) into `dir`.
 
-  The pack bytes are verified against the digest the log recorded before they
-  are handed to Git, so a truncated or corrupted transfer fails here rather
-  than surfacing as a mysterious repository error later.
+  The pack is written straight to disk and then verified against the digest the
+  log recorded, so a truncated or corrupted transfer fails here rather than
+  surfacing as a mysterious repository error later. A pack that fails
+  verification is deleted; a caller must never find a half-written file where a
+  verified one is expected.
   """
   @spec get_pack(repo_id(), Entry.pack(), Path.t()) :: {:ok, Path.t()} | {:error, term()}
   def get_pack(repo_id, pack, dir) do
@@ -431,29 +439,42 @@ defmodule Micelio.WAL do
     name = Path.basename(pack.key)
     destination = Path.join(dir, name)
 
-    case ObjectStore.get(pack.key) do
-      {:ok, body, _etag} ->
-        if pack.digest && digest(body) != pack.digest do
-          {:error, {:pack_digest_mismatch, pack.key}}
-        else
-          File.write!(destination, body)
-          fetch_pack_index(repo_id, pack, dir, name)
-          {:ok, destination}
-        end
+    case ObjectStore.get_file(pack.key, destination) do
+      {:ok, size} ->
+        case verify_pack(destination, pack) do
+          :ok ->
+            :telemetry.execute([:micelio, :wal, :pack_download], %{bytes: size}, %{repo_id: repo_id})
+            fetch_pack_index(repo_id, pack, dir, name)
+            {:ok, destination}
 
-      {:ok, :not_modified} ->
-        {:error, :unexpected_not_modified}
+          {:error, reason} ->
+            File.rm(destination)
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
+  defp verify_pack(_path, %{digest: digest}) when digest in [nil, ""], do: :ok
+
+  defp verify_pack(path, pack) do
+    expected = pack.digest
+
+    case ObjectStore.digest_file(path) do
+      {:ok, ^expected, _size} -> :ok
+      {:ok, _other, _size} -> {:error, {:pack_digest_mismatch, pack.key}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp fetch_pack_index(_repo_id, pack, dir, name) do
     idx_key = Path.rootname(pack.key) <> ".idx"
+    destination = Path.join(dir, Path.rootname(name) <> ".idx")
 
-    case ObjectStore.get(idx_key) do
-      {:ok, body, _etag} -> File.write!(Path.join(dir, Path.rootname(name) <> ".idx"), body)
+    case ObjectStore.get_file(idx_key, destination) do
+      {:ok, _size} -> :ok
       _ -> :ok
     end
   end
@@ -497,6 +518,10 @@ defmodule Micelio.WAL do
   # and "we just wrote it" are the same outcome.
   defp write_immutable(key, body) do
     ObjectStore.put(key, body, if_none_match: "*") |> allow_already_present()
+  end
+
+  defp stream_immutable(key, path) do
+    ObjectStore.put_file(key, path, if_none_match: "*") |> allow_already_present()
   end
 
   defp allow_already_present({:error, :precondition_failed}), do: {:ok, :already_present}

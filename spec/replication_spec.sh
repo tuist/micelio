@@ -25,6 +25,34 @@ Describe 'Replication'
     The output should include "# e2e"
   End
 
+  It 'moves a repository larger than any buffer we would want to hold'
+    repo=$(new_repo)
+    source=$(make_source)
+    clone=$(mktemp -d)/clone
+
+    admin "$NODE1_ADMIN_URL" POST /repositories -d "{\"repository\":\"$repo\"}" >/dev/null
+
+    # A pack is as large as a customer's history, so nothing on this path may
+    # hold one whole: not the node that receives the push, not the node that
+    # materializes the repository from the log. 64 MiB of incompressible bytes
+    # is small next to a real repository but far larger than any buffer, and it
+    # travels through a real S3 the same way a large one would.
+    When run bash -c "
+      set -e
+      cd '$source'
+      head -c 67108864 /dev/urandom > big.bin
+      git add big.bin && git commit -qm 'feat: a large blob'
+      git push -q '$(git_url "$NODE1_URL" "$repo")' main
+
+      # Node 2 has never seen this repository: it streams the pack down from
+      # the log to answer.
+      git clone -q '$(git_url "$NODE2_URL" "$repo")' '$clone'
+      cmp big.bin '$clone/big.bin' && echo identical
+    "
+    The status should equal 0
+    The output should include "identical"
+  End
+
   It 'accepts pushes on either node'
     repo=$(new_repo)
     source=$(make_source)
