@@ -42,7 +42,8 @@ defmodule Micelio.HTTP.WellKnownRouter do
   # Git itself cannot discover an OAuth client or open a browser. This document
   # is consumed by the repository's setup script, which configures Git
   # Credential Manager for this exact origin. It is absent unless an operator
-  # explicitly configured a public OAuth client for the deployment.
+  # explicitly configured a public OAuth client or a dynamic-registration
+  # endpoint for the deployment.
   get "/micelio-git-auth" do
     case Micelio.Config.git_auth() do
       nil ->
@@ -70,14 +71,18 @@ defmodule Micelio.HTTP.WellKnownRouter do
     [
       "version=1",
       "issuer=#{git_auth.issuer}",
-      "client_id=#{git_auth.client_id}",
       "authorization_endpoint=#{git_auth.authorization_endpoint}",
       "token_endpoint=#{git_auth.token_endpoint}",
       "redirect_uri=#{git_auth.redirect_uri}",
       "scopes=#{Enum.join(git_auth.scopes, " ")}",
       "username=#{git_auth.username}"
     ]
+    |> maybe_append("client_id", git_auth.client_id)
+    |> maybe_append("registration_endpoint", git_auth.registration_endpoint)
     |> Enum.join("\n")
     |> Kernel.<>("\n")
   end
+
+  defp maybe_append(lines, _key, nil), do: lines
+  defp maybe_append(lines, key, value), do: lines ++ ["#{key}=#{value}"]
 end

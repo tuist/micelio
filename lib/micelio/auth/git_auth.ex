@@ -3,18 +3,27 @@ defmodule Micelio.Auth.GitAuth do
 
   @type config :: %{
           issuer: String.t(),
-          client_id: String.t(),
+          client_id: String.t() | nil,
           authorization_endpoint: String.t(),
           token_endpoint: String.t(),
+          registration_endpoint: String.t() | nil,
           redirect_uri: String.t(),
           scopes: [String.t()],
           username: String.t()
         }
 
   @spec build(String.t() | nil, keyword()) :: config() | nil
-  def build(client_id, _opts) when client_id in [nil, ""], do: nil
-
   def build(client_id, opts) do
+    registration_endpoint = Keyword.fetch!(opts, :registration_endpoint)
+
+    if client_id in [nil, ""] and registration_endpoint in [nil, ""] do
+      nil
+    else
+      build_enabled(client_id, registration_endpoint, opts)
+    end
+  end
+
+  defp build_enabled(client_id, registration_endpoint, opts) do
     backend = Keyword.fetch!(opts, :backend)
     kubernetes = Keyword.fetch!(opts, :kubernetes)
 
@@ -29,15 +38,22 @@ defmodule Micelio.Auth.GitAuth do
       """
     end
 
+    if client_id not in [nil, ""] and registration_endpoint not in [nil, ""] do
+      raise ArgumentError,
+            "MICELIO_GIT_AUTH_CLIENT_ID and MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT are mutually exclusive"
+    end
+
     %{
       issuer: https_url!(Keyword.fetch!(opts, :issuer), "MICELIO_OIDC_ISSUER"),
-      client_id: one_line!(client_id, "MICELIO_GIT_AUTH_CLIENT_ID", 512),
+      client_id: optional_one_line!(client_id, "MICELIO_GIT_AUTH_CLIENT_ID", 512),
       authorization_endpoint:
         https_url!(
           Keyword.fetch!(opts, :authorization_endpoint),
           "MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT"
         ),
       token_endpoint: https_url!(Keyword.fetch!(opts, :token_endpoint), "MICELIO_GIT_AUTH_TOKEN_ENDPOINT"),
+      registration_endpoint:
+        optional_https_url!(registration_endpoint, "MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT"),
       redirect_uri: loopback_redirect_uri!(Keyword.fetch!(opts, :redirect_uri)),
       scopes: scopes!(Keyword.fetch!(opts, :scopes)),
       username: username!(Keyword.fetch!(opts, :username))
@@ -54,6 +70,9 @@ defmodule Micelio.Auth.GitAuth do
 
     value
   end
+
+  defp optional_https_url!(value, _name) when value in [nil, ""], do: nil
+  defp optional_https_url!(value, name), do: https_url!(value, name)
 
   # OAuth permits a loopback redirect to use HTTP because the request never
   # leaves the developer machine. Keeping this to 127.0.0.1 avoids a hostname
@@ -105,4 +124,7 @@ defmodule Micelio.Auth.GitAuth do
   end
 
   defp one_line!(_value, name, _maximum), do: raise(ArgumentError, "#{name} must be a string")
+
+  defp optional_one_line!(value, _name, _maximum) when value in [nil, ""], do: nil
+  defp optional_one_line!(value, name, maximum), do: one_line!(value, name, maximum)
 end

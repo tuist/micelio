@@ -186,9 +186,10 @@ defmodule Micelio.Config do
   @spec git_auth() ::
           %{
             issuer: String.t(),
-            client_id: String.t(),
+            client_id: String.t() | nil,
             authorization_endpoint: String.t(),
             token_endpoint: String.t(),
+            registration_endpoint: String.t() | nil,
             redirect_uri: String.t(),
             scopes: [String.t()],
             username: String.t()

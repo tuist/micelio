@@ -84,13 +84,15 @@ issuer. Micelio remains only a token validator: it does not issue, store, or
 exchange credentials.
 
 This is available only with the `oidc` backend and an external issuer, not the
-Kubernetes service-account issuer. Configure one public [OAuth
-2.0](https://oauth.net/2/) client at the identity provider, with a loopback
-redirect URI accepted by Git Credential Manager, then set:
+Kubernetes service-account issuer. Either configure one public [OAuth
+2.0](https://oauth.net/2/) client at the identity provider or enable dynamic
+registration. Both choices use a loopback redirect URI accepted by Git
+Credential Manager. For a fixed public client, set:
 
 | Variable | Meaning |
 |---|---|
-| `MICELIO_GIT_AUTH_CLIENT_ID` | The public OAuth client identifier. Never put a client secret in Micelio. |
+| `MICELIO_GIT_AUTH_CLIENT_ID` | The public OAuth client identifier. Never put a client secret in Micelio. Mutually exclusive with dynamic registration. |
+| `MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT` | Optional [OpenID Connect Dynamic Client Registration](https://openid.net/specs/openid-connect-registration-1_0-24.html) endpoint. Set this instead of `MICELIO_GIT_AUTH_CLIENT_ID`. |
 | `MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT` | HTTPS browser authorization endpoint. |
 | `MICELIO_GIT_AUTH_TOKEN_ENDPOINT` | HTTPS token endpoint. |
 | `MICELIO_GIT_AUTH_REDIRECT_URI` | Loopback redirect URI; defaults to `http://127.0.0.1`. Register this exact value with the identity provider. |
@@ -113,6 +115,29 @@ Git configuration scoped to that exact origin. It neither receives nor stores a
 token. For a release
 download, publish this script and a signed checksum as immutable release assets;
 do not make `curl | bash` the documented installation path.
+
+#### Dynamic registration
+
+Set `MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT` rather than a client identifier
+when the identity provider explicitly permits OpenID Connect Dynamic Client
+Registration. Developers then opt in with:
+
+```sh
+./scripts/configure-micelio-git --url https://git.example.com --dynamic-registration
+```
+
+This mode requires [jq](https://jqlang.org/) to safely construct and inspect
+the JavaScript Object Notation registration messages. It registers a public
+authorization-code client with no secret, exact loopback redirect URI, and no
+token-endpoint client authentication. The script rejects a response that changes
+those properties.
+
+Dynamic registration is not universally available. Providers may require an
+administrator-issued initial access token, disable public registration, or
+rate-limit registrations. The installer deliberately does not send an initial
+access token and does not retain the registration management token returned by
+some providers. A new invocation therefore creates a new client; use the
+static public-client configuration when that operational cost is unsuitable.
 
 The identity provider must issue an access token Micelio can validate: a signed
 JSON Web Token whose audience is `MICELIO_OIDC_AUDIENCE`. An identity token is

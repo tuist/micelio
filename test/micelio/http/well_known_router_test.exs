@@ -28,6 +28,7 @@ defmodule Micelio.HTTP.WellKnownRouterTest do
         client_id: "micelio-developers",
         authorization_endpoint: "https://identity.example.com/authorize",
         token_endpoint: "https://identity.example.com/token",
+        registration_endpoint: nil,
         redirect_uri: "http://127.0.0.1",
         scopes: ["openid", "profile", "offline_access"],
         username: "oauth2"
@@ -43,13 +44,34 @@ defmodule Micelio.HTTP.WellKnownRouterTest do
     assert conn.resp_body == """
            version=1
            issuer=https://identity.example.com
-           client_id=micelio-developers
            authorization_endpoint=https://identity.example.com/authorize
            token_endpoint=https://identity.example.com/token
            redirect_uri=http://127.0.0.1
            scopes=openid profile offline_access
            username=oauth2
+           client_id=micelio-developers
            """
+  end
+
+  test "publishes a dynamic client-registration endpoint without a client id" do
+    Config.put_overrides(%{
+      git_auth: %{
+        issuer: "https://identity.example.com",
+        client_id: nil,
+        authorization_endpoint: "https://identity.example.com/authorize",
+        token_endpoint: "https://identity.example.com/token",
+        registration_endpoint: "https://identity.example.com/register",
+        redirect_uri: "http://127.0.0.1",
+        scopes: ["openid", "profile"],
+        username: "oauth2"
+      }
+    })
+
+    conn = call("/micelio-git-auth")
+
+    assert conn.status == 200
+    refute conn.resp_body =~ "client_id="
+    assert conn.resp_body =~ "registration_endpoint=https://identity.example.com/register\n"
   end
 
   defp call(path) do

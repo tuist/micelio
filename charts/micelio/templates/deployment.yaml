@@ -145,12 +145,16 @@ spec:
 
             - name: MICELIO_AUTH_BACKEND
               value: {{ .Values.auth.backend | quote }}
-            {{- if and (ne .Values.auth.backend "oidc") .Values.auth.gitAuth.clientId }}
+            {{- $gitAuthEnabled := or .Values.auth.gitAuth.clientId .Values.auth.gitAuth.registrationEndpoint }}
+            {{- if and (ne .Values.auth.backend "oidc") $gitAuthEnabled }}
             {{- fail "auth.gitAuth requires auth.backend=oidc" }}
             {{- end }}
             {{- if eq .Values.auth.backend "oidc" }}
-            {{- if and .Values.auth.gitAuth.clientId .Values.auth.oidc.kubernetes }}
+            {{- if and $gitAuthEnabled .Values.auth.oidc.kubernetes }}
             {{- fail "auth.gitAuth requires an external OpenID Connect issuer; it cannot use Kubernetes service-account tokens" }}
+            {{- end }}
+            {{- if and .Values.auth.gitAuth.clientId .Values.auth.gitAuth.registrationEndpoint }}
+            {{- fail "auth.gitAuth.clientId and auth.gitAuth.registrationEndpoint are mutually exclusive" }}
             {{- end }}
             {{- with .Values.auth.oidc.issuer }}
             - name: MICELIO_OIDC_ISSUER
@@ -172,19 +176,25 @@ spec:
               value: {{ .Values.auth.oidc.namespaceGrants | quote }}
             - name: MICELIO_OIDC_GRANTS_CLAIM
               value: {{ .Values.auth.oidc.grantsClaim | quote }}
+            {{- if $gitAuthEnabled }}
             {{- with .Values.auth.gitAuth.clientId }}
             - name: MICELIO_GIT_AUTH_CLIENT_ID
               value: {{ . | quote }}
+            {{- end }}
             - name: MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT
-              value: {{ required "auth.gitAuth.authorizationEndpoint is required when auth.gitAuth.clientId is set" $.Values.auth.gitAuth.authorizationEndpoint | quote }}
+              value: {{ required "auth.gitAuth.authorizationEndpoint is required when auth.gitAuth is enabled" $.Values.auth.gitAuth.authorizationEndpoint | quote }}
             - name: MICELIO_GIT_AUTH_TOKEN_ENDPOINT
-              value: {{ required "auth.gitAuth.tokenEndpoint is required when auth.gitAuth.clientId is set" $.Values.auth.gitAuth.tokenEndpoint | quote }}
+              value: {{ required "auth.gitAuth.tokenEndpoint is required when auth.gitAuth is enabled" $.Values.auth.gitAuth.tokenEndpoint | quote }}
             - name: MICELIO_GIT_AUTH_REDIRECT_URI
               value: {{ $.Values.auth.gitAuth.redirectUri | default "http://127.0.0.1" | quote }}
             - name: MICELIO_GIT_AUTH_SCOPES
-              value: {{ required "auth.gitAuth.scopes is required when auth.gitAuth.clientId is set" $.Values.auth.gitAuth.scopes | quote }}
+              value: {{ required "auth.gitAuth.scopes is required when auth.gitAuth is enabled" $.Values.auth.gitAuth.scopes | quote }}
             - name: MICELIO_GIT_AUTH_USERNAME
               value: {{ $.Values.auth.gitAuth.username | default "oauth2" | quote }}
+            {{- with .Values.auth.gitAuth.registrationEndpoint }}
+            - name: MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- else if eq .Values.auth.backend "webhook" }}
             - name: MICELIO_AUTH_ENDPOINT

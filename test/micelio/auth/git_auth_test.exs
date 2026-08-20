@@ -9,6 +9,7 @@ defmodule Micelio.Auth.GitAuthTest do
     issuer: "https://identity.example.com",
     authorization_endpoint: "https://identity.example.com/authorize",
     token_endpoint: "https://identity.example.com/token",
+    registration_endpoint: nil,
     redirect_uri: "http://127.0.0.1",
     scopes: "openid profile",
     username: "oauth2"
@@ -24,6 +25,21 @@ defmodule Micelio.Auth.GitAuthTest do
              GitAuth.build("micelio-developers", @opts)
   end
 
+  test "builds dynamic client-registration settings without a client id" do
+    opts = Keyword.put(@opts, :registration_endpoint, "https://identity.example.com/register")
+
+    assert %{client_id: nil, registration_endpoint: "https://identity.example.com/register"} =
+             GitAuth.build(nil, opts)
+  end
+
+  test "rejects static and dynamic client settings together" do
+    opts = Keyword.put(@opts, :registration_endpoint, "https://identity.example.com/register")
+
+    assert_raise ArgumentError, ~r/mutually exclusive/, fn ->
+      GitAuth.build("micelio-developers", opts)
+    end
+  end
+
   test "defaults an empty username" do
     assert %{username: "oauth2"} = GitAuth.build("micelio-developers", Keyword.put(@opts, :username, ""))
   end
@@ -33,6 +49,8 @@ defmodule Micelio.Auth.GitAuthTest do
         {:credentialed_issuer, :issuer, "https://user:pass@identity.example.com", "MICELIO_OIDC_ISSUER"},
         {:insecure_endpoint, :token_endpoint, "http://identity.example.com/token",
          "MICELIO_GIT_AUTH_TOKEN_ENDPOINT"},
+        {:insecure_registration_endpoint, :registration_endpoint, "http://identity.example.com/register",
+         "MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT"},
         {:bad_redirect, :redirect_uri, "https://identity.example.com/callback",
          "MICELIO_GIT_AUTH_REDIRECT_URI"},
         {:empty_scopes, :scopes, "", "MICELIO_GIT_AUTH_SCOPES"},

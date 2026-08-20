@@ -72,6 +72,7 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
       issuer: System.get_env("MICELIO_OIDC_ISSUER"),
       authorization_endpoint: System.get_env("MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT"),
       token_endpoint: System.get_env("MICELIO_GIT_AUTH_TOKEN_ENDPOINT"),
+      registration_endpoint: System.get_env("MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT"),
       redirect_uri: get.("MICELIO_GIT_AUTH_REDIRECT_URI", "http://127.0.0.1"),
       scopes: System.get_env("MICELIO_GIT_AUTH_SCOPES"),
       username: get.("MICELIO_GIT_AUTH_USERNAME", "oauth2")
