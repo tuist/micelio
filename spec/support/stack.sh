@@ -197,12 +197,24 @@ stack::oidc_up() {
   export E2E_OIDC_TOKEN="$(cat "${STACK_DIR}/oidc-token")"
   export CURL_CA_BUNDLE="$E2E_TLS_CERT"
 
+  printf '%s\n' \
+    'version=1' \
+    "issuer=${E2E_HTTPS_URL}/issuer" \
+    "authorization_endpoint=${E2E_HTTPS_URL}/issuer/authorize" \
+    "token_endpoint=${E2E_HTTPS_URL}/issuer/token" \
+    "registration_endpoint=${E2E_HTTPS_URL}/issuer/register" \
+    'redirect_uri=http://127.0.0.1' \
+    'scopes=openid profile' \
+    'username=oauth2' > "${STACK_DIR}/git-auth-metadata"
+
   cat > "${STACK_DIR}/Caddyfile" <<EOF
 :${E2E_TLS_PORT} {
   tls /work/tls/cert.pem /work/tls/key.pem
   handle /.well-known/micelio-git-auth {
+    root * /work
+    rewrite * /git-auth-metadata
     header Content-Type text/plain
-    respond "version=1\\nissuer=${E2E_HTTPS_URL}/issuer\\nauthorization_endpoint=${E2E_HTTPS_URL}/issuer/authorize\\ntoken_endpoint=${E2E_HTTPS_URL}/issuer/token\\nregistration_endpoint=${E2E_HTTPS_URL}/issuer/register\\nredirect_uri=http://127.0.0.1\\nscopes=openid profile\\nusername=oauth2\\n"
+    file_server
   }
   @issuer path /issuer/*
   reverse_proxy @issuer host.docker.internal:${E2E_OIDC_PORT}
