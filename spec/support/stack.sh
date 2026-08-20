@@ -42,6 +42,7 @@ export NODE2_GIT=4200 NODE2_HOOK=4201 NODE2_ADMIN=4202
 export E2E_OIDC_PORT=4300 E2E_TLS_PORT=4443
 export E2E_HTTPS_URL="https://127.0.0.1:${E2E_TLS_PORT}"
 export E2E_TLS_CERT="${STACK_DIR}/tls/cert.pem"
+export E2E_GIT_HELPER_DIR="${STACK_DIR}/bin"
 
 export NODE1_URL="http://127.0.0.1:${NODE1_GIT}"
 export NODE2_URL="http://127.0.0.1:${NODE2_GIT}"
@@ -247,7 +248,6 @@ GITCONFIG
 }
 
 stack::credential_manager() {
-  export E2E_GIT_HELPER_DIR="${STACK_DIR}/bin"
   mkdir -p "$E2E_GIT_HELPER_DIR"
 
   cat > "${E2E_GIT_HELPER_DIR}/git-credential-manager" <<'EOF'
