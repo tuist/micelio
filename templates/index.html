@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="{{ config.default_language }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{{ config.description }}">
+    <title>{{ config.title }}</title>
+    <link rel="icon" type="image/png" href="{{ get_url(path='favicon.png') }}">
+    <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="/">micelio</a>
+      <nav aria-label="Primary navigation">
+        <a href="/getting-started/">start</a>
+        <a href="/agents/">agents</a>
+        <a href="/hosting/">host</a>
+        <a href="/operations/">operate</a>
+        <a href="/changelog/">changes</a>
+        <a href="https://github.com/tuist/micelio">github</a>
+      </nav>
+    </header>
+
+    <main>
+      <article>
+        <nav class="contents" aria-label="Guides">
+          <a href="/getting-started/"><span aria-hidden="true">🚀</span> getting started</a>
+          <a href="/agents/"><span aria-hidden="true">🤖</span> use it with agents</a>
+          <a href="/hosting/"><span aria-hidden="true">☸️</span> host it</a>
+          <a href="/operations/"><span aria-hidden="true">📈</span> operate it</a>
+          <a href="/changelog/"><span aria-hidden="true">✨</span> changelog</a>
+        </nav>
+
+        {{ section.content | safe }}
+      </article>
+    </main>
+  </body>
+</html>

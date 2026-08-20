@@ -1,0 +1,44 @@
+name: Deploy marketing site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-site.yml"
+      - "config.toml"
+      - "content/**"
+      - "mise.toml"
+      - "sass/**"
+      - "static/**"
+      - "templates/**"
+      - "wrangler.jsonc"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-micelio-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Install the website toolchain
+        uses: jdx/mise-action@v4
+        with:
+          install_args: "zola node npm:wrangler"
+
+      - name: Build the website
+        run: mise run site
+
+      - name: Deploy the Worker
+        run: mise exec -- wrangler deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
