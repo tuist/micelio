@@ -36,6 +36,7 @@ configure_git_auth() {
   if [ -f "$log" ]; then
     grep -F 'credential.https://git.example.com.helper ' "$log"
     grep -F 'credential.https://git.example.com.helper manager' "$log"
+    grep -F 'credential.https://git.example.com.oauthClientId ' "$log"
     grep -F 'credential.https://git.example.com.oauthRedirectUri http://127.0.0.1' "$log"
     grep -F 'credential.https://git.example.com.oauthUseClientAuthHeader false' "$log"
   fi

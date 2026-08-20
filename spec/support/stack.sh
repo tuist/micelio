@@ -41,6 +41,7 @@ export NODE1_GIT=4100 NODE1_HOOK=4101 NODE1_ADMIN=4102
 export NODE2_GIT=4200 NODE2_HOOK=4201 NODE2_ADMIN=4202
 export E2E_OIDC_PORT=4300 E2E_TLS_PORT=4443
 export E2E_HTTPS_URL="https://127.0.0.1:${E2E_TLS_PORT}"
+export E2E_TLS_CERT="${STACK_DIR}/tls/cert.pem"
 
 export NODE1_URL="http://127.0.0.1:${NODE1_GIT}"
 export NODE2_URL="http://127.0.0.1:${NODE2_GIT}"
@@ -193,7 +194,7 @@ stack::oidc_up() {
   # compile the test support path before Bandit can listen.
   stack::wait_for "http://127.0.0.1:${E2E_OIDC_PORT}/issuer/keys" 90 "OIDC issuer"
   export E2E_OIDC_TOKEN="$(cat "${STACK_DIR}/oidc-token")"
-  export CURL_CA_BUNDLE="${STACK_DIR}/tls/cert.pem"
+  export CURL_CA_BUNDLE="$E2E_TLS_CERT"
 
   cat > "${STACK_DIR}/Caddyfile" <<EOF
 :${E2E_TLS_PORT} {
