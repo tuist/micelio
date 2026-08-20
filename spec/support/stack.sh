@@ -188,7 +188,10 @@ stack::oidc_up() {
     >"${STACK_DIR}/oidc.log" 2>&1 &
   echo $! > "${STACK_DIR}/oidc.pid"
 
-  stack::wait_for "http://127.0.0.1:${E2E_OIDC_PORT}/issuer/keys" 30 "OIDC issuer"
+  # The issuer runs in the test environment so it can share the real JSON Web
+  # Token implementation. A cold continuous-integration runner may need to
+  # compile the test support path before Bandit can listen.
+  stack::wait_for "http://127.0.0.1:${E2E_OIDC_PORT}/issuer/keys" 90 "OIDC issuer"
   export E2E_OIDC_TOKEN="$(cat "${STACK_DIR}/oidc-token")"
   export CURL_CA_BUNDLE="${STACK_DIR}/tls/cert.pem"
 
