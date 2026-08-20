@@ -197,7 +197,7 @@ stack::oidc_up() {
 
   cat > "${STACK_DIR}/Caddyfile" <<EOF
 :${E2E_TLS_PORT} {
-  tls /cert/cert.pem /cert/key.pem
+  tls /work/tls/cert.pem /work/tls/key.pem
   handle /.well-known/micelio-git-auth {
     header Content-Type text/plain
     respond "version=1\\nissuer=${E2E_HTTPS_URL}/issuer\\nauthorization_endpoint=${E2E_HTTPS_URL}/issuer/authorize\\ntoken_endpoint=${E2E_HTTPS_URL}/issuer/token\\nregistration_endpoint=${E2E_HTTPS_URL}/issuer/register\\nredirect_uri=http://127.0.0.1\\nscopes=openid profile\\nusername=oauth2\\n"
