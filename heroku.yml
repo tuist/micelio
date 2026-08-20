@@ -1,0 +1,5 @@
+build:
+  docker:
+    web: Dockerfile
+run:
+  web: /bin/sh -c 'MICELIO_GIT_PORT="$PORT" exec /app/bin/micelio start'

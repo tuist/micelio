@@ -8,6 +8,9 @@ erl_crash.dump
 /code-*.tar
 .elixir_ls/
 .elixir-tools/
+/public/
+/.wrangler/
+/cloudflare.token
 
 # Local runtime state: materialized repositories and the dev object store.
 /tmp/

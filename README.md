@@ -9,6 +9,28 @@ authoritative copy of a repository lives. A node's on-disk repository is a warm
 cache; the log in S3 is the repository. That one inversion is where everything
 else comes from.
 
+The design starts from Cursor's [Git at any scale](https://cursor.com/blog/git-at-any-scale),
+then adapts it to the Erlang runtime.
+
+## Deploy one node
+
+The buttons create a single-node Micelio service from this repository and ask
+for object-store credentials during setup. The local disk stays a disposable
+cache; the object store is the durable repository.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Ftuist%2Fmicelio)
+[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/tuist/micelio/tree/main)
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/tuist/micelio/tree/main)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftuist%2Fmicelio%2Fmain%2Finfra%2Fazuredeploy.json)
+[![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftuist%2Fmicelio&project-name=micelio&env=MICELIO_S3_BUCKET%2CMICELIO_S3_ENDPOINT%2CMICELIO_S3_ACCESS_KEY_ID%2CMICELIO_S3_SECRET_ACCESS_KEY%2CMICELIO_AUTH_TOKENS%2CMICELIO_ADMIN_TOKEN&envLink=https%3A%2F%2Fmicelio.dev%2Fhosting%2F)
+
+Both forms request `MICELIO_AUTH_TOKENS` in the format
+`token=account:read,write`. See the [hosting guide](https://micelio.dev/hosting/)
+for object-store requirements and production options. Vercel is intended for
+small evaluations; use Render, DigitalOcean, Heroku, Azure, or Kubernetes for
+long-lived Git traffic. Railway needs a published template identifier before a
+working deploy link can be added.
+
 ```
                  ┌──────────────────────────────────────┐
                  │        object storage (S3)           │

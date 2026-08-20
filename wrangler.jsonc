@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.124.0/config-schema.json",
+  "name": "micelio-site",
+  "compatibility_date": "2026-08-20",
+  "workers_dev": false,
+  "assets": {
+    "directory": "./public/"
+  },
+  // Keep the existing apex record intact while routing every request through
+  // the Worker. The Worker is the origin for the static assets.
+  "routes": [
+    {
+      "pattern": "micelio.dev/*",
+      "zone_id": "de20b5392f09fda6ab480245ee934066"
+    }
+  ]
+}

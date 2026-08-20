@@ -15,6 +15,11 @@ shellspec = "0.28.1"
 # Releases are cut from conventional commits; see mise/tasks/release.
 git-cliff = "2.10.1"
 helm = "3.19.0"
+# The project website is a static Zola site deployed to Cloudflare Workers.
+zola = "0.22.1"
+# Cloudflare deployment tooling for the static website.
+node = "26.7.0"
+"npm:wrangler" = "4.124.0"
 
 [env]
 # Never pin MIX_ENV here: `mix test` only switches to :test when MIX_ENV is
@@ -61,3 +66,16 @@ run = ["mix format --check-formatted", "mix credo --strict"]
 [tasks.server]
 description = "Run a single node against the local filesystem object store"
 run = "iex -S mix"
+
+[tasks.site]
+description = "Build the Micelio website"
+run = "zola build"
+
+[tasks."site:serve"]
+description = "Serve the Micelio website locally"
+run = "zola serve"
+
+[tasks."site:deploy"]
+description = "Build and deploy the Micelio website to Cloudflare Workers"
+depends = ["site"]
+run = "wrangler deploy"

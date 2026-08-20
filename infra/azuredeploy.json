@@ -1,0 +1,180 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {
+      "type": "string",
+      "defaultValue": "[concat('micelio-', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "A unique name for the Container App."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "objectStorageBucket": {
+      "type": "string",
+      "metadata": {
+        "description": "Bucket that holds Micelio's write-ahead log."
+      }
+    },
+    "objectStorageEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "HTTPS endpoint for an S3-compatible object store."
+      }
+    },
+    "objectStorageAccessKeyId": {
+      "type": "secureString"
+    },
+    "objectStorageSecretAccessKey": {
+      "type": "secureString"
+    },
+    "authTokens": {
+      "type": "secureString",
+      "metadata": {
+        "description": "Static grants, for example token=acme:read,write."
+      }
+    },
+    "adminToken": {
+      "type": "secureString"
+    }
+  },
+  "variables": {
+    "workspaceName": "[concat(parameters('appName'), '-logs')]",
+    "environmentName": "[concat(parameters('appName'), '-environment')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('workspaceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('environmentName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]"
+      ],
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2022-10-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2022-10-01').primarySharedKey]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('appName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]"
+      ],
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
+        "configuration": {
+          "secrets": [
+            {
+              "name": "object-storage-access-key",
+              "value": "[parameters('objectStorageAccessKeyId')]"
+            },
+            {
+              "name": "object-storage-secret-key",
+              "value": "[parameters('objectStorageSecretAccessKey')]"
+            },
+            {
+              "name": "auth-tokens",
+              "value": "[parameters('authTokens')]"
+            },
+            {
+              "name": "admin-token",
+              "value": "[parameters('adminToken')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 4000,
+            "transport": "auto"
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "micelio",
+              "image": "ghcr.io/tuist/micelio:latest",
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "MICELIO_S3_BUCKET",
+                  "value": "[parameters('objectStorageBucket')]"
+                },
+                {
+                  "name": "MICELIO_S3_ENDPOINT",
+                  "value": "[parameters('objectStorageEndpoint')]"
+                },
+                {
+                  "name": "MICELIO_S3_ACCESS_KEY_ID",
+                  "secretRef": "object-storage-access-key"
+                },
+                {
+                  "name": "MICELIO_S3_SECRET_ACCESS_KEY",
+                  "secretRef": "object-storage-secret-key"
+                },
+                {
+                  "name": "MICELIO_AUTH_BACKEND",
+                  "value": "static"
+                },
+                {
+                  "name": "MICELIO_AUTH_TOKENS",
+                  "secretRef": "auth-tokens"
+                },
+                {
+                  "name": "MICELIO_ADMIN_TOKEN",
+                  "secretRef": "admin-token"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 4000
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 10
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "applicationUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', parameters('appName')), '2024-03-01').properties.configuration.ingress.fqdn)]"
+    }
+  }
+}
