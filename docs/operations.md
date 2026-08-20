@@ -74,6 +74,90 @@ See [kubernetes.md](kubernetes.md) for the full picture.
 | `MICELIO_OIDC_AUDIENCE` | **Set this.** Binds tokens to this deployment |
 | `MICELIO_AUTH_ENDPOINT` | For the webhook backend |
 
+### Browser login for Git
+
+Git's HTTP transport can prompt for a password, but it cannot by itself run a
+browser sign-in. Micelio therefore supports [Git Credential
+Manager](https://github.com/git-ecosystem/git-credential-manager) as an
+optional client-side bridge to an [OpenID Connect](https://openid.net/developers/how-connect-works/)
+issuer. Micelio remains only a token validator: it does not issue, store, or
+exchange credentials.
+
+This is available only with the `oidc` backend and an external issuer, not the
+Kubernetes service-account issuer. Either configure one public [OAuth
+2.0](https://oauth.net/2/) client at the identity provider or enable dynamic
+registration. Both choices use a loopback redirect URI accepted by Git
+Credential Manager. For a fixed public client, set:
+
+| Variable | Meaning |
+|---|---|
+| `MICELIO_GIT_AUTH_CLIENT_ID` | The public OAuth client identifier. Never put a client secret in Micelio. Mutually exclusive with dynamic registration. |
+| `MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT` | Optional [OpenID Connect Dynamic Client Registration](https://openid.net/specs/openid-connect-registration-1_0-24.html) endpoint. Set this instead of `MICELIO_GIT_AUTH_CLIENT_ID`. |
+| `MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT` | HTTPS browser authorization endpoint. |
+| `MICELIO_GIT_AUTH_TOKEN_ENDPOINT` | HTTPS token endpoint. |
+| `MICELIO_GIT_AUTH_REDIRECT_URI` | Loopback redirect URI; defaults to `http://127.0.0.1`. Register this exact value with the identity provider. |
+| `MICELIO_GIT_AUTH_SCOPES` | Space-separated scopes required to obtain a token Micelio accepts. |
+| `MICELIO_GIT_AUTH_USERNAME` | HTTP Basic username used for tokens; defaults to `oauth2`. |
+
+When enabled, `GET /.well-known/micelio-git-auth` publishes this public client
+configuration. It publishes no secret or token. Developers can configure their
+existing Git installation from a verified checkout. The machine needs Git
+Credential Manager already installed; the script does not install it or change
+credentials for other hosts:
+
+```sh
+./scripts/configure-micelio-git --url https://git.example.com
+```
+
+The script defaults to `https://micelio.dev`, downloads metadata only over
+HTTPS without redirects, validates its strict `key=value` document, and writes
+Git configuration scoped to that exact origin. It neither receives nor stores a
+token. For a release
+download, publish this script and a signed checksum as immutable release assets;
+do not make `curl | bash` the documented installation path.
+
+#### Dynamic registration
+
+Set `MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT` rather than a client identifier
+when the identity provider explicitly permits OpenID Connect Dynamic Client
+Registration. Developers then opt in with:
+
+```sh
+./scripts/configure-micelio-git --url https://git.example.com --dynamic-registration
+```
+
+This mode requires [jq](https://jqlang.org/) to safely construct and inspect
+the JavaScript Object Notation registration messages. It registers a public
+authorization-code client with no secret, exact loopback redirect URI, and no
+token-endpoint client authentication. The script rejects a response that changes
+those properties.
+
+Dynamic registration is not universally available. Providers may require an
+administrator-issued initial access token, disable public registration, or
+rate-limit registrations. The installer deliberately does not send an initial
+access token and does not retain the registration management token returned by
+some providers. A new invocation therefore creates a new client; use the
+static public-client configuration when that operational cost is unsuitable.
+
+The identity provider must issue an access token Micelio can validate: a signed
+JSON Web Token whose audience is `MICELIO_OIDC_AUDIENCE`. An identity token is
+not a substitute for that access token. The necessary audience or resource
+parameter is provider-specific, so include it in `MICELIO_GIT_AUTH_SCOPES` or
+the registered client configuration.
+
+Some identity providers require an exact loopback port instead of accepting the
+standard dynamic port. In that case, configure the same explicit port in
+`MICELIO_GIT_AUTH_REDIRECT_URI` and register that exact URI.
+
+To remove this setup, run:
+
+```sh
+git config --global --remove-section 'credential.https://git.example.com'
+```
+
+The setup script resets inherited credential helpers for this origin before it
+adds Git Credential Manager, so credentials for other Git hosts are unaffected.
+
 ### Observability
 
 | Variable | Notes |

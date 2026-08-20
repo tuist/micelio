@@ -20,8 +20,6 @@ spec_helper_precheck() {
   # Set by support/stack.sh. Without it, git commands in this suite can pick up
   # the developer's credential helper and block indefinitely.
   [ -f "${E2E_GITCONFIG:-}" ] || abort "hermetic gitconfig missing. Start the stack with: mise run e2e:up"
-  command -v python3 >/dev/null 2>&1 || abort "python3 is required"
-
   if ! curl -fsS "${NODE1_ADMIN_URL}/health" >/dev/null 2>&1; then
     abort "micelio is not running. Start the stack with: mise run e2e:up"
   fi

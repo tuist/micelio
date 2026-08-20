@@ -107,3 +107,6 @@ subject for someone reading a changelog, and do not use `feat:` for a refactor.
 
 Commit bodies are the right place for the reasoning: what was tried, what was
 rejected, and how the change was verified.
+
+Pull request titles follow the same Conventional Commits convention as commit
+subjects, because they are part of the release-facing change narrative.

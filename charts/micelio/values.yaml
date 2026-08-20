@@ -81,6 +81,21 @@ auth:
     tokens: ""
     existingSecret: ""
 
+  # Optional browser login for developers using Git Credential Manager. These
+  # values are public OAuth client configuration, never a client secret. It is
+  # available only with `backend: oidc` and `oidc.kubernetes: false`.
+  gitAuth:
+    clientId: ""
+    # Optional OpenID Connect Dynamic Client Registration endpoint. Set this
+    # instead of clientId to let each developer register a public client.
+    registrationEndpoint: ""
+    authorizationEndpoint: ""
+    tokenEndpoint: ""
+    # Register this exact loopback redirect URI with the identity provider.
+    redirectUri: http://127.0.0.1
+    scopes: ""
+    username: oauth2
+
 # Bearer token for the admin API. Generated and stored in a Secret if empty.
 adminToken: ""
 

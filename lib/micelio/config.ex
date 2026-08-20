@@ -182,6 +182,21 @@ defmodule Micelio.Config do
   @spec authorization_servers() :: [String.t()]
   def authorization_servers, do: get(:authorization_servers, [])
 
+  @doc "Public browser-login settings for Git Credential Manager, if enabled."
+  @spec git_auth() ::
+          %{
+            issuer: String.t(),
+            client_id: String.t() | nil,
+            authorization_endpoint: String.t(),
+            token_endpoint: String.t(),
+            registration_endpoint: String.t() | nil,
+            redirect_uri: String.t(),
+            scopes: [String.t()],
+            username: String.t()
+          }
+          | nil
+  def git_auth, do: get(:git_auth, nil)
+
   @spec put(atom(), term()) :: :ok
   def put(key, value), do: Application.put_env(@app, key, value)
 

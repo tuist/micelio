@@ -57,14 +57,35 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
       path_style: get.("MICELIO_S3_PATH_STYLE", "true") == "true"
     }
 
+  auth_backend = get.("MICELIO_AUTH_BACKEND", "webhook")
+  oidc_kubernetes = get.("MICELIO_OIDC_KUBERNETES", "false") == "true"
+
+  # This is deliberately public configuration for Git Credential Manager, not
+  # another authentication backend. The client id identifies a public OAuth
+  # client and is safe to publish; a client secret must never be configured
+  # here. Keep browser login opt-in because projected Kubernetes tokens do not
+  # have an interactive authorization endpoint.
+  git_auth =
+    Micelio.Auth.GitAuth.build(System.get_env("MICELIO_GIT_AUTH_CLIENT_ID"),
+      backend: auth_backend,
+      kubernetes: oidc_kubernetes,
+      issuer: System.get_env("MICELIO_OIDC_ISSUER"),
+      authorization_endpoint: System.get_env("MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT"),
+      token_endpoint: System.get_env("MICELIO_GIT_AUTH_TOKEN_ENDPOINT"),
+      registration_endpoint: System.get_env("MICELIO_GIT_AUTH_REGISTRATION_ENDPOINT"),
+      redirect_uri: get.("MICELIO_GIT_AUTH_REDIRECT_URI", "http://127.0.0.1"),
+      scopes: System.get_env("MICELIO_GIT_AUTH_SCOPES"),
+      username: get.("MICELIO_GIT_AUTH_USERNAME", "oauth2")
+    )
+
   auth =
-    case get.("MICELIO_AUTH_BACKEND", "webhook") do
+    case auth_backend do
       "oidc" ->
         {Micelio.Auth.OIDC,
-         issuer: System.get_env("MICELIO_OIDC_ISSUER"),
+         issuer: if(git_auth, do: git_auth.issuer, else: System.get_env("MICELIO_OIDC_ISSUER")),
          audience: require_env.("MICELIO_OIDC_AUDIENCE"),
          jwks_uri: System.get_env("MICELIO_OIDC_JWKS_URI"),
-         kubernetes: get.("MICELIO_OIDC_KUBERNETES", "false") == "true",
+         kubernetes: oidc_kubernetes,
          namespace_grants: get.("MICELIO_OIDC_NAMESPACE_GRANTS", "true") == "true",
          grants_claim: get.("MICELIO_OIDC_GRANTS_CLAIM", "micelio_grants")}
 
@@ -107,6 +128,7 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
     public_url: System.get_env("MICELIO_PUBLIC_URL"),
     resource_identifier: System.get_env("MICELIO_RESOURCE_IDENTIFIER"),
     authorization_servers: get.("MICELIO_AUTHORIZATION_SERVERS", "") |> String.split(",", trim: true),
+    git_auth: git_auth,
     tracing_enabled: System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") != nil
 
   # Node discovery. libcluster's only job is to make nodes visible to each

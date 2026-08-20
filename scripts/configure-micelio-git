@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Configure Git Credential Manager for one Micelio deployment.
+#
+# This script deliberately never receives a token or an OAuth client secret.
+# It downloads only public deployment metadata over HTTPS, validates it, then
+# writes Git configuration scoped to the requested origin.
+
+set -euo pipefail
+
+origin="https://micelio.dev"
+dynamic_registration=false
+
+usage() {
+  cat <<'EOF'
+Usage: configure-micelio-git [--url https://git.example.com] [--dynamic-registration]
+
+Configures Git Credential Manager for browser login to one Micelio deployment.
+The deployment must publish /.well-known/micelio-git-auth.
+
+--dynamic-registration registers a public client using the deployment's OpenID
+Connect Dynamic Client Registration endpoint. It requires jq.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --url)
+      (($# >= 2)) || { echo "--url needs a value" >&2; exit 2; }
+      origin="$2"
+      shift 2
+      ;;
+    --dynamic-registration)
+      dynamic_registration=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
+command -v git >/dev/null || { echo "Git is required" >&2; exit 1; }
+
+case "$origin" in https://*) ;; *) echo "--url must be an HTTPS origin" >&2; exit 1 ;; esac
+origin=${origin%/}
+origin_rest=${origin#https://}
+origin_authority=${origin_rest%%/*}
+[ "$origin_rest" = "$origin_authority" ] && [ -n "$origin_authority" ] &&
+  [ "${origin_authority#*@}" = "$origin_authority" ] && [ "${origin_authority#*\?}" = "$origin_authority" ] || {
+  echo "--url must be an HTTPS origin without credentials, a path, query, or fragment" >&2
+  exit 1
+}
+if ! git credential-manager version >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+Git Credential Manager is required for browser login and was not found.
+Install it from https://github.com/git-ecosystem/git-credential-manager, then run this script again.
+EOF
+  exit 1
+fi
+
+metadata="$(mktemp "${TMPDIR:-/tmp}/micelio-git-auth.XXXXXX")"
+trap 'rm -f "$metadata"' EXIT
+
+# No redirects: the requested origin is the trust boundary for its public
+# client configuration. `--proto` prevents a redirect or typo from downgrading
+# the metadata request to HTTP.
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-redirs 0 \
+  "${origin%/}/.well-known/micelio-git-auth" >"$metadata"
+
+version= issuer= client_id= authorize= token= registration_endpoint= redirect= scopes= username=
+seen_version= seen_issuer= seen_client_id= seen_authorize= seen_token=
+seen_registration_endpoint= seen_redirect= seen_scopes= seen_username=
+
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    *=*) key=${line%%=*}; value=${line#*=} ;;
+    *) echo "Micelio Git-auth metadata is invalid: expected key=value lines" >&2; exit 1 ;;
+  esac
+
+  case "$key" in
+    version) [ -z "$seen_version" ] || { echo "Micelio Git-auth metadata is invalid: duplicate version" >&2; exit 1; }; version=$value; seen_version=1 ;;
+    issuer) [ -z "$seen_issuer" ] || { echo "Micelio Git-auth metadata is invalid: duplicate issuer" >&2; exit 1; }; issuer=$value; seen_issuer=1 ;;
+    client_id) [ -z "$seen_client_id" ] || { echo "Micelio Git-auth metadata is invalid: duplicate client_id" >&2; exit 1; }; client_id=$value; seen_client_id=1 ;;
+    authorization_endpoint) [ -z "$seen_authorize" ] || { echo "Micelio Git-auth metadata is invalid: duplicate authorization_endpoint" >&2; exit 1; }; authorize=$value; seen_authorize=1 ;;
+    token_endpoint) [ -z "$seen_token" ] || { echo "Micelio Git-auth metadata is invalid: duplicate token_endpoint" >&2; exit 1; }; token=$value; seen_token=1 ;;
+    registration_endpoint) [ -z "$seen_registration_endpoint" ] || { echo "Micelio Git-auth metadata is invalid: duplicate registration_endpoint" >&2; exit 1; }; registration_endpoint=$value; seen_registration_endpoint=1 ;;
+    redirect_uri) [ -z "$seen_redirect" ] || { echo "Micelio Git-auth metadata is invalid: duplicate redirect_uri" >&2; exit 1; }; redirect=$value; seen_redirect=1 ;;
+    scopes) [ -z "$seen_scopes" ] || { echo "Micelio Git-auth metadata is invalid: duplicate scopes" >&2; exit 1; }; scopes=$value; seen_scopes=1 ;;
+    username) [ -z "$seen_username" ] || { echo "Micelio Git-auth metadata is invalid: duplicate username" >&2; exit 1; }; username=$value; seen_username=1 ;;
+    *) echo "Micelio Git-auth metadata is invalid: unknown key $key" >&2; exit 1 ;;
+  esac
+done <"$metadata"
+
+[ "$version" = "1" ] || { echo "Micelio Git-auth metadata is invalid: unsupported version" >&2; exit 1; }
+
+https_url() {
+  value=$1
+  case "$value" in https://*) ;; *) return 1 ;; esac
+  rest=${value#https://}
+  authority=${rest%%/*}
+  [ -n "$authority" ] && [ "${authority#*@}" = "$authority" ] && [ "${authority#*\?}" = "$authority" ] &&
+    case "$value" in *" "*|*$'\r'*|*"#"*) return 1 ;; esac
+}
+
+https_url "$issuer" || { echo "Micelio Git-auth metadata is invalid: issuer must be an HTTPS URL without credentials or a fragment" >&2; exit 1; }
+https_url "$authorize" || { echo "Micelio Git-auth metadata is invalid: authorization_endpoint must be an HTTPS URL without credentials or a fragment" >&2; exit 1; }
+https_url "$token" || { echo "Micelio Git-auth metadata is invalid: token_endpoint must be an HTTPS URL without credentials or a fragment" >&2; exit 1; }
+[ -z "$registration_endpoint" ] || https_url "$registration_endpoint" || { echo "Micelio Git-auth metadata is invalid: registration_endpoint must be an HTTPS URL without credentials or a fragment" >&2; exit 1; }
+[[ "$redirect" =~ ^http://127\.0\.0\.1(:[0-9]{1,5})?$ ]] || { echo "Micelio Git-auth metadata is invalid: redirect_uri must be an HTTP 127.0.0.1 origin" >&2; exit 1; }
+[[ "$username" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Micelio Git-auth metadata is invalid: username contains unsupported characters" >&2; exit 1; }
+IFS=' ' read -r -a scope_values <<<"$scopes"
+[ "${#scope_values[@]}" -gt 0 ] || { echo "Micelio Git-auth metadata is invalid: scopes must be non-empty" >&2; exit 1; }
+for scope in "${scope_values[@]}"; do
+  [ -n "$scope" ] && [ "${#scope}" -le 256 ] && [[ "$scope" =~ ^[^[:space:][:cntrl:]]+$ ]] || {
+    echo "Micelio Git-auth metadata is invalid: scopes contain unsupported characters" >&2
+    exit 1
+  }
+done
+
+if "$dynamic_registration"; then
+  [ -n "$registration_endpoint" ] || {
+    echo "This deployment does not enable OpenID Connect Dynamic Client Registration" >&2
+    exit 1
+  }
+  [ -z "$client_id" ] || {
+    echo "This deployment publishes a fixed public client; omit --dynamic-registration" >&2
+    exit 1
+  }
+  command -v jq >/dev/null || {
+    echo "jq is required for --dynamic-registration: https://jqlang.org/" >&2
+    exit 1
+  }
+
+  registration_response="$(mktemp "${TMPDIR:-/tmp}/micelio-git-registration.XXXXXX")"
+  trap 'rm -f "$metadata" "$registration_response"' EXIT
+
+  # The registration request contains only public-client attributes. In
+  # particular, it asks for no client secret and pins the callback to the
+  # exact loopback URI Micelio advertised.
+  jq -n --arg redirect "$redirect" --arg scopes "$scopes" \
+    '{client_name: "Micelio Git Credential Manager", application_type: "native", redirect_uris: [$redirect], grant_types: ["authorization_code"], response_types: ["code"], token_endpoint_auth_method: "none", scope: $scopes}' \
+    | curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-redirs 0 \
+        --request POST --header 'Content-Type: application/json' --data-binary @- \
+        "$registration_endpoint" >"$registration_response"
+
+  jq -e '(.token_endpoint_auth_method // "none") == "none"' "$registration_response" >/dev/null || {
+    echo "Dynamic registration returned a client that requires client authentication" >&2
+    exit 1
+  }
+  jq -e --arg redirect "$redirect" '.redirect_uris == [$redirect]' "$registration_response" >/dev/null || {
+    echo "Dynamic registration returned unexpected redirect URIs" >&2
+    exit 1
+  }
+  client_id="$(jq -er '.client_id | strings | select(length > 0 and length <= 512 and test("[\\r\\n]") | not)' "$registration_response")" || {
+    echo "Dynamic registration returned no usable client_id" >&2
+    exit 1
+  }
+else
+  [ -z "$registration_endpoint" ] || {
+    echo "This deployment requires --dynamic-registration" >&2
+    exit 1
+  }
+fi
+
+[ -n "$client_id" ] && [ "${#client_id}" -le 512 ] || { echo "Micelio Git-auth metadata is invalid: client_id must be a non-empty one-line string no longer than 512 characters" >&2; exit 1; }
+
+# An empty, origin-specific helper resets inherited global helpers. Without it,
+# an existing keychain helper could return an old password before Git Credential
+# Manager gets a chance to open the browser for this host.
+git config --global --replace-all "credential.${origin}.helper" ""
+git config --global --add "credential.${origin}.helper" manager
+git config --global --replace-all "credential.${origin}.oauthClientId" "$client_id"
+git config --global --replace-all "credential.${origin}.oauthAuthorizeEndpoint" "$authorize"
+git config --global --replace-all "credential.${origin}.oauthTokenEndpoint" "$token"
+git config --global --replace-all "credential.${origin}.oauthRedirectUri" "$redirect"
+git config --global --replace-all "credential.${origin}.oauthScopes" "$scopes"
+git config --global --replace-all "credential.${origin}.oauthDefaultUserName" "$username"
+git config --global --replace-all "credential.${origin}.oauthUseClientAuthHeader" false
+
+echo "Configured Git Credential Manager for ${origin}."
+echo "Your next HTTPS clone will open a browser to sign in when Git needs a credential."
