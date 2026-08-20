@@ -74,6 +74,65 @@ See [kubernetes.md](kubernetes.md) for the full picture.
 | `MICELIO_OIDC_AUDIENCE` | **Set this.** Binds tokens to this deployment |
 | `MICELIO_AUTH_ENDPOINT` | For the webhook backend |
 
+### Browser login for Git
+
+Git's HTTP transport can prompt for a password, but it cannot by itself run a
+browser sign-in. Micelio therefore supports [Git Credential
+Manager](https://github.com/git-ecosystem/git-credential-manager) as an
+optional client-side bridge to an [OpenID Connect](https://openid.net/developers/how-connect-works/)
+issuer. Micelio remains only a token validator: it does not issue, store, or
+exchange credentials.
+
+This is available only with the `oidc` backend and an external issuer, not the
+Kubernetes service-account issuer. Configure one public [OAuth
+2.0](https://oauth.net/2/) client at the identity provider, with a loopback
+redirect URI accepted by Git Credential Manager, then set:
+
+| Variable | Meaning |
+|---|---|
+| `MICELIO_GIT_AUTH_CLIENT_ID` | The public OAuth client identifier. Never put a client secret in Micelio. |
+| `MICELIO_GIT_AUTH_AUTHORIZATION_ENDPOINT` | HTTPS browser authorization endpoint. |
+| `MICELIO_GIT_AUTH_TOKEN_ENDPOINT` | HTTPS token endpoint. |
+| `MICELIO_GIT_AUTH_REDIRECT_URI` | Loopback redirect URI; defaults to `http://127.0.0.1`. Register this exact value with the identity provider. |
+| `MICELIO_GIT_AUTH_SCOPES` | Space-separated scopes required to obtain a token Micelio accepts. |
+| `MICELIO_GIT_AUTH_USERNAME` | HTTP Basic username used for tokens; defaults to `oauth2`. |
+
+When enabled, `GET /.well-known/micelio-git-auth` publishes this public client
+configuration. It publishes no secret or token. Developers can configure their
+existing Git installation from a verified checkout. The machine needs Git
+Credential Manager already installed; the script does not install it or change
+credentials for other hosts:
+
+```sh
+./scripts/configure-micelio-git --url https://git.example.com
+```
+
+The script defaults to `https://micelio.dev`, downloads metadata only over
+HTTPS without redirects, validates its strict `key=value` document, and writes
+Git configuration scoped to that exact origin. It neither receives nor stores a
+token. For a release
+download, publish this script and a signed checksum as immutable release assets;
+do not make `curl | bash` the documented installation path.
+
+The identity provider must issue an access token Micelio can validate: a signed
+JSON Web Token whose audience is `MICELIO_OIDC_AUDIENCE`. An identity token is
+not a substitute for that access token. The necessary audience or resource
+parameter is provider-specific, so include it in `MICELIO_GIT_AUTH_SCOPES` or
+the registered client configuration.
+
+Some identity providers require an exact loopback port instead of accepting the
+standard dynamic port. In that case, configure the same explicit port in
+`MICELIO_GIT_AUTH_REDIRECT_URI` and register that exact URI.
+
+To remove this setup, run:
+
+```sh
+git config --global --remove-section 'credential.https://git.example.com'
+```
+
+The setup script resets inherited credential helpers for this origin before it
+adds Git Credential Manager, so credentials for other Git hosts are unaffected.
+
 ### Observability
 
 | Variable | Notes |
