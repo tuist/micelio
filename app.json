@@ -1,0 +1,32 @@
+{
+  "name": "Micelio",
+  "description": "Git hosting whose durable state lives in object storage.",
+  "repository": "https://github.com/tuist/micelio",
+  "website": "https://micelio.pages.dev",
+  "stack": "container",
+  "env": {
+    "MICELIO_S3_BUCKET": {
+      "description": "Name of the object-store bucket that holds Micelio's write-ahead log."
+    },
+    "MICELIO_S3_ENDPOINT": {
+      "description": "HTTPS endpoint for the S3-compatible object store."
+    },
+    "MICELIO_S3_ACCESS_KEY_ID": {
+      "description": "Access key for the object store."
+    },
+    "MICELIO_S3_SECRET_ACCESS_KEY": {
+      "description": "Secret access key for the object store."
+    },
+    "MICELIO_AUTH_BACKEND": {
+      "value": "static",
+      "required": false
+    },
+    "MICELIO_AUTH_TOKENS": {
+      "description": "Token grants, for example token=acme:read,write."
+    },
+    "MICELIO_ADMIN_TOKEN": {
+      "description": "Bearer token for Micelio's private administration endpoint.",
+      "generator": "secret"
+    }
+  }
+}
