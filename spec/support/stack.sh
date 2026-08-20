@@ -39,6 +39,8 @@ export E2E_OUTSIDER_TOKEN="e2e-outsider-token"
 
 export NODE1_GIT=4100 NODE1_HOOK=4101 NODE1_ADMIN=4102
 export NODE2_GIT=4200 NODE2_HOOK=4201 NODE2_ADMIN=4202
+export E2E_OIDC_PORT=4300 E2E_TLS_PORT=4443
+export E2E_HTTPS_URL="https://127.0.0.1:${E2E_TLS_PORT}"
 
 export NODE1_URL="http://127.0.0.1:${NODE1_GIT}"
 export NODE2_URL="http://127.0.0.1:${NODE2_GIT}"
@@ -175,6 +177,39 @@ stack::node_up() {
   fi
 }
 
+stack::oidc_up() {
+  mkdir -p "${STACK_DIR}/tls"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -subj '/CN=127.0.0.1' \
+    -addext 'subjectAltName=IP:127.0.0.1' \
+    -keyout "${STACK_DIR}/tls/key.pem" -out "${STACK_DIR}/tls/cert.pem" >/dev/null 2>&1
+
+  MIX_ENV=test mix run -e "Micelio.E2EOIDCIssuer.run(${E2E_OIDC_PORT}, \"${STACK_DIR}/oidc-token\")" \
+    >"${STACK_DIR}/oidc.log" 2>&1 &
+  echo $! > "${STACK_DIR}/oidc.pid"
+
+  stack::wait_for "http://127.0.0.1:${E2E_OIDC_PORT}/issuer/keys" 30 "OIDC issuer"
+  export E2E_OIDC_TOKEN="$(cat "${STACK_DIR}/oidc-token")"
+  export CURL_CA_BUNDLE="${STACK_DIR}/tls/cert.pem"
+
+  cat > "${STACK_DIR}/Caddyfile" <<EOF
+:${E2E_TLS_PORT} {
+  tls /cert/cert.pem /cert/key.pem
+  handle /.well-known/micelio-git-auth {
+    header Content-Type text/plain
+    respond "version=1\\nissuer=${E2E_HTTPS_URL}/issuer\\nauthorization_endpoint=${E2E_HTTPS_URL}/issuer/authorize\\ntoken_endpoint=${E2E_HTTPS_URL}/issuer/token\\nregistration_endpoint=${E2E_HTTPS_URL}/issuer/register\\nredirect_uri=http://127.0.0.1\\nscopes=openid profile\\nusername=oauth2\\n"
+  }
+  @issuer path /issuer/*
+  reverse_proxy @issuer host.docker.internal:${E2E_OIDC_PORT}
+  reverse_proxy host.docker.internal:${NODE1_GIT}
+}
+EOF
+  docker run -d --rm --name micelio-e2e-tls --add-host=host.docker.internal:host-gateway \
+    -p "${E2E_TLS_PORT}:4443" -v "${STACK_DIR}:/work:ro" \
+    caddy:2.10.2-alpine caddy run --config /work/Caddyfile --adapter caddyfile >/dev/null
+  stack::wait_for "${E2E_HTTPS_URL}/issuer/keys" 30 "TLS proxy"
+}
+
 stack::wait_for() {
   local url=$1 attempts=${2:-60} what=${3:-service}
   local i=0
@@ -207,9 +242,28 @@ stack::gitconfig() {
 GITCONFIG
 }
 
+stack::credential_manager() {
+  export E2E_GIT_HELPER_DIR="${STACK_DIR}/bin"
+  mkdir -p "$E2E_GIT_HELPER_DIR"
+
+  cat > "${E2E_GIT_HELPER_DIR}/git-credential-manager" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  version) exit 0 ;;
+  get)
+    cat >/dev/null
+    printf 'username=oauth2\npassword=%s\n\n' "$E2E_TOKEN"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${E2E_GIT_HELPER_DIR}/git-credential-manager"
+}
+
 stack::up() {
   mkdir -p "${STACK_DIR}"
   stack::gitconfig
+  stack::credential_manager
   stack::minio_up
   stack::bucket
 
@@ -219,11 +273,17 @@ stack::up() {
   # Compile once up front so the two nodes do not race on _build.
   (cd "${MICELIO_ROOT}" && ${MISE_PREFIX} mix compile >/dev/null 2>&1) || true
 
+  stack::oidc_up
   stack::node_up micelio-e2e-1 "$NODE1_GIT" "$NODE1_HOOK" "$NODE1_ADMIN"
   stack::node_up micelio-e2e-2 "$NODE2_GIT" "$NODE2_HOOK" "$NODE2_ADMIN"
 }
 
 stack::down() {
+  if [ -f "${STACK_DIR}/oidc.pid" ]; then
+    kill "$(cat "${STACK_DIR}/oidc.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/oidc.pid"
+  fi
+  docker rm -f micelio-e2e-tls >/dev/null 2>&1 || true
   for name in micelio-e2e-1 micelio-e2e-2; do
     if [ -f "${STACK_DIR}/${name}.pid" ]; then
       kill "$(cat "${STACK_DIR}/${name}.pid")" 2>/dev/null || true
