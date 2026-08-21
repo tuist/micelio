@@ -5,7 +5,7 @@
 # the OTP major it was compiled against.
 [tools]
 erlang = "29.0.5"
-elixir = "1.20.3-otp-29"
+elixir = "1.20.3"
 # The write-ahead log is a persisted wire format, so its schema is compiled
 # from .proto rather than hand-written. See priv/proto and `mise run proto`.
 protoc = "35.1"
