@@ -33,4 +33,16 @@ defmodule Micelio.Git.PrivacyTest do
     assert status != 0
     assert output =~ "deny updating a hidden ref"
   end
+
+  test "applies private-reference transport settings to an existing repository", %{root: root} do
+    target = Path.join(root, "existing.git")
+    assert {_output, 0} = git(["init", "--bare", "--quiet", target], root)
+
+    assert :ok = Git.configure_bare(target)
+
+    assert {"false\n", 0} = git(["config", "--get", "uploadpack.allowAnySHA1InWant"], target)
+    assert {"refs/micelio\n", 0} = git(["config", "--get", "transfer.hideRefs"], target)
+    assert {"refs/micelio\n", 0} = git(["config", "--get", "uploadpack.hideRefs"], target)
+    assert {"refs/micelio\n", 0} = git(["config", "--get", "receive.hideRefs"], target)
+  end
 end

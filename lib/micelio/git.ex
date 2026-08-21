@@ -101,6 +101,15 @@ defmodule Micelio.Git do
     head = Keyword.get(opts, :head, "refs/heads/main")
     File.mkdir_p!(path)
 
+    with {:ok, _} <- run(nil, ["init", "--bare", "--quiet", path]),
+         :ok <- configure_bare(path) do
+      set_head(path, head)
+    end
+  end
+
+  @doc false
+  @spec configure_bare(path()) :: :ok | {:error, term()}
+  def configure_bare(path) do
     settings = [
       {"receive.unpackLimit", "1"},
       {"receive.denyDeletes", "false"},
@@ -120,10 +129,7 @@ defmodule Micelio.Git do
       {"receive.hideRefs", "refs/micelio"}
     ]
 
-    with {:ok, _} <- run(nil, ["init", "--bare", "--quiet", path]),
-         :ok <- Enum.reduce_while(settings, :ok, &apply_setting(path, &1, &2)) do
-      set_head(path, head)
-    end
+    Enum.reduce_while(settings, :ok, &apply_setting(path, &1, &2))
   end
 
   defp apply_setting(path, {key, value}, _acc) do
