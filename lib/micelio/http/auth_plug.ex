@@ -115,11 +115,20 @@ defmodule Micelio.HTTP.AuthPlug do
   defp mcp?(%{path_info: ["mcp" | _]}), do: true
   defp mcp?(_conn), do: false
 
+  defp api?(conn), do: conn.assigns[:api] == true
+
   defp deny(conn, status, message) do
-    conn
-    |> put_resp_content_type("text/plain")
-    |> send_resp(status, message <> "\n")
-    |> halt()
+    if api?(conn) do
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(status, JSON.encode!(%{error: message}))
+      |> halt()
+    else
+      conn
+      |> put_resp_content_type("text/plain")
+      |> send_resp(status, message <> "\n")
+      |> halt()
+    end
   end
 
   @doc "URL of this deployment's OAuth protected-resource metadata document."

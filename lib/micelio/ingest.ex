@@ -34,6 +34,7 @@ defmodule Micelio.Ingest do
 
   alias Micelio.Cluster
   alias Micelio.Git
+  alias Micelio.Git.Ref
   alias Micelio.Ingest.Writer
   alias Micelio.Replica
   alias Micelio.WAL
@@ -105,7 +106,7 @@ defmodule Micelio.Ingest do
   # on whichever node received the push; only the index update is funnelled
   # through the repository's writer, where concurrent pushes become one batch
   # instead of a queue of losers retrying. See `Micelio.Ingest.Writer`.
-  defp append(repo_id, commands, packs, actor) do
+  defp append(repo_id, commands, packs, actor, opts \\ []) do
     entry =
       Entry.new(
         type: :ENTRY_TYPE_PUSH,
@@ -122,7 +123,7 @@ defmodule Micelio.Ingest do
     # point before a command becomes part of the log, and the log is where an
     # unrepresentable name does permanent damage.
     validate = fn index ->
-      with :ok <- check_ref_names(commands) do
+      with :ok <- check_ref_names(commands, Keyword.get(opts, :internal?, false)) do
         check_fast_forward(index, commands)
       end
     end
@@ -134,8 +135,22 @@ defmodule Micelio.Ingest do
 
   # A name Git cannot represent must never reach the log: it would be applied
   # by nobody, and every replica would fail to converge on it forever.
-  defp check_ref_names(commands) do
-    commands |> Enum.map(& &1.ref) |> Micelio.Git.Ref.validate()
+  defp check_ref_names(commands, internal?) do
+    refs = Enum.map(commands, & &1.ref)
+
+    with :ok <- Ref.validate(refs) do
+      case Enum.find(refs, &Ref.internal?/1) do
+        nil ->
+          :ok
+
+        ref ->
+          if internal? and Enum.all?(refs, &Ref.internal?/1) do
+            :ok
+          else
+            {:error, {:reserved_ref, ref}}
+          end
+      end
+    end
   end
 
   defp check_fast_forward(index, commands) do
@@ -198,13 +213,17 @@ defmodule Micelio.Ingest do
   """
   @spec set_head(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_head(repo_id, target) do
-    entry = Entry.new(type: :ENTRY_TYPE_SYMREF, symrefs: %{"HEAD" => target})
+    if Ref.internal?(target) do
+      {:error, :reserved_ref}
+    else
+      entry = Entry.new(type: :ENTRY_TYPE_SYMREF, symrefs: %{"HEAD" => target})
 
-    with {:ok, prepared} <- WAL.prepare(repo_id, entry, fn _index -> :ok end),
-         {:ok, result} <- Writer.commit(repo_id, prepared) do
-      Replica.record_local_push(repo_id, result.epoch, result.seq)
-      Cluster.announce(repo_id, result.epoch, result.seq)
-      {:ok, result}
+      with {:ok, prepared} <- WAL.prepare(repo_id, entry, fn _index -> :ok end),
+           {:ok, result} <- Writer.commit(repo_id, prepared) do
+        Replica.record_local_push(repo_id, result.epoch, result.seq)
+        Cluster.announce(repo_id, result.epoch, result.seq)
+        {:ok, result}
+      end
     end
   end
 
@@ -217,10 +236,22 @@ defmodule Micelio.Ingest do
   """
   @spec update_refs(String.t(), [command()], keyword()) :: {:ok, map()} | {:error, String.t()}
   def update_refs(repo_id, commands, opts \\ []) do
+    case update_refs_raw(repo_id, commands, opts) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, message(reason)}
+    end
+  end
+
+  @doc false
+  @spec update_refs_raw(String.t(), [command()], keyword()) :: {:ok, map()} | {:error, term()}
+  def update_refs_raw(repo_id, commands, opts \\ []) do
     with {:ok, view} <- Replica.ensure_fresh(repo_id),
          {:ok, index, _etag} <- WAL.fetch(repo_id),
          {:ok, packs} <- pack_new_objects(repo_id, view.path, commands, index),
-         {:ok, result} <- append(repo_id, commands, packs, Keyword.get(opts, :actor, %V1.Actor{})) do
+         {:ok, result} <-
+           append(repo_id, commands, packs, Keyword.get(opts, :actor, %V1.Actor{}),
+             internal?: Keyword.get(opts, :internal?, false)
+           ) do
       # The write is durable the moment the log accepted it, so a failure to
       # apply it locally cannot fail the call. It does mean this node is behind,
       # though, so its position is deliberately not recorded — the next read
@@ -237,8 +268,6 @@ defmodule Micelio.Ingest do
 
       Cluster.announce(repo_id, result.epoch, result.seq)
       {:ok, result}
-    else
-      {:error, reason} -> {:error, message(reason)}
     end
   end
 
@@ -299,6 +328,7 @@ defmodule Micelio.Ingest do
 
   defp classify(:writer_overloaded), do: :overloaded
   defp classify({:invalid_ref, _}), do: :invalid_ref
+  defp classify({:reserved_ref, _}), do: :invalid_ref
   defp classify({:pack_failed, _}), do: :storage
   defp classify({:stale, _, _, _}), do: :non_fast_forward
   defp classify({:pack_upload_failed, _}), do: :storage
@@ -317,6 +347,10 @@ defmodule Micelio.Ingest do
 
   defp message({:invalid_ref, ref}) do
     "micelio: #{inspect(ref)} is not a valid reference name"
+  end
+
+  defp message({:reserved_ref, ref}) do
+    "micelio: #{inspect(ref)} is reserved for Micelio"
   end
 
   defp message(:writer_overloaded) do

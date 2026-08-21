@@ -16,7 +16,9 @@ defmodule Micelio.HTTP.Router do
   import Plug.Conn
 
   alias Micelio.HTTP.AuthPlug
+  alias Micelio.HTTP.ApiSpec
   alias Micelio.HTTP.GitRouter
+  alias Micelio.HTTP.IssuesRouter
   alias Micelio.HTTP.MCPRouter
   alias Micelio.HTTP.WellKnownRouter
 
@@ -38,6 +40,19 @@ defmodule Micelio.HTTP.Router do
     conn
     |> AuthPlug.call([])
     |> MCPRouter.call(MCPRouter.init([]))
+  end
+
+  defp route(%{path_info: ["api", "openapi.json"]} = conn) do
+    conn
+    |> OpenApiSpex.Plug.PutApiSpec.call(OpenApiSpex.Plug.PutApiSpec.init(module: ApiSpec))
+    |> OpenApiSpex.Plug.RenderSpec.call([])
+  end
+
+  defp route(%{path_info: ["api", "issues" | rest]} = conn) do
+    conn
+    |> assign(:api, true)
+    |> AuthPlug.call([])
+    |> then(&IssuesRouter.call(%{&1 | path_info: rest}, IssuesRouter.init([])))
   end
 
   defp route(%{path_info: []} = conn) do
