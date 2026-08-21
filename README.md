@@ -3,6 +3,16 @@
 Git hosting whose source of truth is a write-ahead log in object storage, not a
 disk.
 
+> [!WARNING]
+> **Micelio is experimental and is not proven in production.** It is under
+> active development, and the log format, HTTP and MCP interfaces, and
+> configuration may all change in breaking ways between releases, possibly
+> without a migration path for data already in your object store.
+>
+> Use it at your own responsibility. Keep independent backups of anything you
+> care about, and treat a Micelio deployment as the only copy of nothing. As the
+> license states, it comes with no warranty of any kind.
+
 Micelio serves the ordinary Git smart-HTTP protocol, so `git clone`, `git push`
 and every tool built on them work unchanged. What is different is where the
 authoritative copy of a repository lives. A node's on-disk repository is a warm
