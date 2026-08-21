@@ -101,6 +101,15 @@ defmodule Micelio.Git do
     head = Keyword.get(opts, :head, "refs/heads/main")
     File.mkdir_p!(path)
 
+    with {:ok, _} <- run(nil, ["init", "--bare", "--quiet", path]),
+         :ok <- configure_bare(path) do
+      set_head(path, head)
+    end
+  end
+
+  @doc false
+  @spec configure_bare(path()) :: :ok | {:error, term()}
+  def configure_bare(path) do
     settings = [
       {"receive.unpackLimit", "1"},
       {"receive.denyDeletes", "false"},
@@ -111,14 +120,16 @@ defmodule Micelio.Git do
       {"core.logAllRefUpdates", "true"},
       {"repack.writeBitmaps", "true"},
       {"uploadpack.allowFilter", "true"},
-      {"uploadpack.allowAnySHA1InWant", "true"},
-      {"transfer.hideRefs", "refs/micelio"}
+      # Private forge state shares this object database with source code, but
+      # it is not part of the Git transport. Do not advertise it, accept an
+      # update to it, or allow an object id to bypass the hidden reference.
+      {"uploadpack.allowAnySHA1InWant", "false"},
+      {"transfer.hideRefs", "refs/micelio"},
+      {"uploadpack.hideRefs", "refs/micelio"},
+      {"receive.hideRefs", "refs/micelio"}
     ]
 
-    with {:ok, _} <- run(nil, ["init", "--bare", "--quiet", path]),
-         :ok <- Enum.reduce_while(settings, :ok, &apply_setting(path, &1, &2)) do
-      set_head(path, head)
-    end
+    Enum.reduce_while(settings, :ok, &apply_setting(path, &1, &2))
   end
 
   defp apply_setting(path, {key, value}, _acc) do
@@ -300,6 +311,20 @@ defmodule Micelio.Git do
   def resolve(repo_path, rev) do
     with {:ok, out} <- run(repo_path, ["rev-parse", "--verify", "--end-of-options", rev <> "^{commit}"]) do
       {:ok, String.trim(out)}
+    end
+  end
+
+  @doc "Whether a commit is reachable from a non-private reference."
+  @spec public_commit?(path(), oid()) :: boolean()
+  def public_commit?(repo_path, commit) do
+    case run(repo_path, ["for-each-ref", "--contains=#{commit}", "--format=%(refname)"]) do
+      {:ok, output} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.any?(&(not Micelio.Git.Ref.internal?(&1)))
+
+      {:error, _reason} ->
+        false
     end
   end
 

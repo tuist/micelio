@@ -31,6 +31,7 @@ defmodule Micelio.MCP.Tools do
   alias Micelio.Auth
   alias Micelio.Control
   alias Micelio.Git
+  alias Micelio.Issues
   alias Micelio.Replica
   alias Micelio.WAL
   alias Micelio.WAL.Index
@@ -78,6 +79,133 @@ defmodule Micelio.MCP.Tools do
             repository: repository_property(),
             default_branch: %{type: "string", description: "Defaults to main."}
           }
+        }
+      },
+      %{
+        name: "create_issue",
+        title: "Create issue",
+        description: "Open an issue and record its verified author in durable repository history.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "title"],
+          properties: %{
+            repository: repository_property(),
+            title: %{type: "string"},
+            body: %{type: "string", description: "Issue description. Defaults to empty."}
+          }
+        }
+      },
+      %{
+        name: "list_issues",
+        title: "List issues",
+        description: "List the current issues in a repository.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository"],
+          properties: %{repository: repository_property()}
+        }
+      },
+      %{
+        name: "get_issue",
+        title: "Get issue",
+        description: "Read an issue and its current comments.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue"],
+          properties: %{repository: repository_property(), issue: %{type: "integer", minimum: 1}}
+        }
+      },
+      %{
+        name: "update_issue",
+        title: "Update issue",
+        description: "Update an issue's title, description, or open and closed state.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue"],
+          properties: %{
+            repository: repository_property(),
+            issue: %{type: "integer", minimum: 1},
+            title: %{type: "string"},
+            body: %{type: "string"},
+            state: %{type: "string", enum: ["open", "closed"]}
+          }
+        }
+      },
+      %{
+        name: "delete_issue",
+        title: "Delete issue",
+        description: "Hide an issue from current views while retaining its immutable audit history.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue"],
+          properties: %{repository: repository_property(), issue: %{type: "integer", minimum: 1}}
+        }
+      },
+      %{
+        name: "add_issue_comment",
+        title: "Add issue comment",
+        description: "Add a comment recorded with the verified author.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue", "body"],
+          properties: %{
+            repository: repository_property(),
+            issue: %{type: "integer", minimum: 1},
+            body: %{type: "string"}
+          }
+        }
+      },
+      %{
+        name: "get_issue_comment",
+        title: "Get issue comment",
+        description: "Read one current comment from an issue.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue", "comment"],
+          properties: %{
+            repository: repository_property(),
+            issue: %{type: "integer", minimum: 1},
+            comment: %{type: "string"}
+          }
+        }
+      },
+      %{
+        name: "update_issue_comment",
+        title: "Update issue comment",
+        description: "Replace a comment's current body while retaining its immutable history.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue", "comment", "body"],
+          properties: %{
+            repository: repository_property(),
+            issue: %{type: "integer", minimum: 1},
+            comment: %{type: "string"},
+            body: %{type: "string"}
+          }
+        }
+      },
+      %{
+        name: "delete_issue_comment",
+        title: "Delete issue comment",
+        description: "Hide a comment from current views while retaining its immutable history.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue", "comment"],
+          properties: %{
+            repository: repository_property(),
+            issue: %{type: "integer", minimum: 1},
+            comment: %{type: "string"}
+          }
+        }
+      },
+      %{
+        name: "issue_history",
+        title: "Issue history",
+        description: "Read an issue's immutable event history.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "issue"],
+          properties: %{repository: repository_property(), issue: %{type: "integer", minimum: 1}}
         }
       },
       %{
@@ -296,9 +424,11 @@ defmodule Micelio.MCP.Tools do
 
   def call("create_repository", args, principal, _opts) do
     repo_id = args["repository"]
+    default_branch = normalize_branch(args["default_branch"] || "main")
 
-    with :ok <- authorize(principal, repo_id, :write) do
-      opts = if branch = args["default_branch"], do: [default_branch: normalize_branch(branch)], else: []
+    with :ok <- authorize(principal, repo_id, :write),
+         :ok <- public_reference(default_branch) do
+      opts = if args["default_branch"], do: [default_branch: default_branch], else: []
 
       case Control.create_repository(repo_id, opts) do
         {:ok, summary} -> {:ok, summary}
@@ -320,6 +450,78 @@ defmodule Micelio.MCP.Tools do
     end
   end
 
+  def call("create_issue", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write) do
+      Issues.create(repo_id, args["title"], args["body"] || "", principal)
+    end
+  end
+
+  def call("list_issues", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :read), do: Issues.list(repo_id)
+  end
+
+  def call("get_issue", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :read), do: Issues.get(repo_id, args["issue"])
+  end
+
+  def call("update_issue", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write) do
+      Issues.update(repo_id, args["issue"], issue_changes(args), principal)
+    end
+  end
+
+  def call("delete_issue", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write), do: Issues.delete(repo_id, args["issue"], principal)
+  end
+
+  def call("add_issue_comment", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write) do
+      Issues.add_comment(repo_id, args["issue"], args["body"], principal)
+    end
+  end
+
+  def call("get_issue_comment", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :read) do
+      Issues.get_comment(repo_id, args["issue"], args["comment"])
+    end
+  end
+
+  def call("update_issue_comment", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write) do
+      Issues.update_comment(repo_id, args["issue"], args["comment"], args["body"], principal)
+    end
+  end
+
+  def call("delete_issue_comment", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :write) do
+      Issues.delete_comment(repo_id, args["issue"], args["comment"], principal)
+    end
+  end
+
+  def call("issue_history", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :read), do: Issues.events(repo_id, args["issue"])
+  end
+
   def call("list_refs", args, principal, _opts) do
     repo_id = args["repository"]
 
@@ -327,6 +529,7 @@ defmodule Micelio.MCP.Tools do
          {:ok, index, _etag} <- WAL.fetch(repo_id) do
       refs =
         index.refs
+        |> Enum.reject(fn {ref, _oid} -> Git.Ref.internal?(ref) end)
         |> Enum.filter(fn {ref, _oid} -> matches_pattern?(ref, args["pattern"]) end)
         |> Enum.sort()
         |> Enum.map(fn {ref, oid} -> %{ref: ref, oid: oid} end)
@@ -339,25 +542,7 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
 
     with :ok <- authorize(principal, repo_id, :read) do
-      in_repository(repo_id, fn view ->
-        rev = revision(args["ref"], view)
-
-        case Git.read_file(view.path, rev, args["path"]) do
-          {:ok, content} ->
-            {:ok,
-             %{
-               path: args["path"],
-               ref: rev,
-               size: byte_size(content),
-               binary: binary?(content),
-               content: if(binary?(content), do: Base.encode64(content), else: content),
-               encoding: if(binary?(content), do: "base64", else: "utf8")
-             }}
-
-          {:error, _} ->
-            {:error, "#{args["path"]} does not exist at #{rev}"}
-        end
-      end)
+      in_repository(repo_id, &read_file_at(&1, args))
     end
   end
 
@@ -365,19 +550,7 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
 
     with :ok <- authorize(principal, repo_id, :read) do
-      in_repository(repo_id, fn view ->
-        rev = revision(args["ref"], view)
-        dir = args["path"] || ""
-        dir = if dir == "" or String.ends_with?(dir, "/"), do: dir, else: dir <> "/"
-
-        case Git.list_tree(view.path, rev, dir, recursive: args["recursive"] == true) do
-          {:ok, entries} ->
-            {:ok, %{ref: rev, path: args["path"] || "", entries: entries, count: length(entries)}}
-
-          {:error, _} ->
-            {:error, "could not list #{args["path"] || "/"} at #{rev}"}
-        end
-      end)
+      in_repository(repo_id, &list_tree_at(&1, args))
     end
   end
 
@@ -385,21 +558,7 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
 
     with :ok <- authorize(principal, repo_id, :read) do
-      in_repository(repo_id, fn view ->
-        rev = revision(args["ref"], view)
-
-        opts = [
-          limit: args["limit"] || 100,
-          fixed: args["regex"] != true,
-          ignore_case: args["ignore_case"] == true,
-          path: args["path"]
-        ]
-
-        case Git.grep(view.path, rev, args["query"], opts) do
-          {:ok, matches} -> {:ok, %{ref: rev, query: args["query"], matches: matches, count: length(matches)}}
-          {:error, reason} -> {:error, "search failed: #{inspect(reason)}"}
-        end
-      end)
+      in_repository(repo_id, &search_at(&1, args))
     end
   end
 
@@ -407,14 +566,7 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
 
     with :ok <- authorize(principal, repo_id, :read) do
-      in_repository(repo_id, fn view ->
-        rev = revision(args["ref"], view)
-
-        case Git.log(view.path, rev, limit: args["limit"] || 50, path: args["path"]) do
-          {:ok, commits} -> {:ok, %{ref: rev, commits: commits, count: length(commits)}}
-          {:error, _} -> {:error, "could not read history at #{rev}"}
-        end
-      end)
+      in_repository(repo_id, &log_at(&1, args))
     end
   end
 
@@ -422,15 +574,7 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
 
     with :ok <- authorize(principal, repo_id, :read) do
-      in_repository(repo_id, fn view ->
-        case Git.diff(view.path, args["from"], args["to"],
-               path: args["path"],
-               stat_only: args["stat_only"] == true
-             ) do
-          {:ok, diff} -> {:ok, %{from: args["from"], to: args["to"], diff: diff, empty: diff == ""}}
-          {:error, reason} -> {:error, "could not diff: #{inspect(reason)}"}
-        end
-      end)
+      in_repository(repo_id, &diff_at(&1, args))
     end
   end
 
@@ -446,7 +590,9 @@ defmodule Micelio.MCP.Tools do
     repo_id = args["repository"]
     branch = normalize_branch(args["branch"])
 
-    with :ok <- authorize(principal, repo_id, :write) do
+    with :ok <- authorize(principal, repo_id, :write),
+         :ok <- public_reference(branch),
+         :ok <- public_reference(args["target"]) do
       in_repository(repo_id, &point_branch(&1, repo_id, branch, args, principal))
     end
   end
@@ -456,6 +602,7 @@ defmodule Micelio.MCP.Tools do
     branch = normalize_branch(args["branch"])
 
     with :ok <- authorize(principal, repo_id, :write),
+         :ok <- public_reference(branch),
          {:ok, index, _etag} <- WAL.fetch(repo_id) do
       current = Index.ref(index, branch)
       zero = WAL.Entry.zero_oid()
@@ -517,14 +664,89 @@ defmodule Micelio.MCP.Tools do
 
   def call(name, _args, _principal, _opts), do: {:error, "unknown tool: #{name}"}
 
+  defp read_file_at(view, args) do
+    with {:ok, rev} <- public_revision(args["ref"], view) do
+      case Git.read_file(view.path, rev, args["path"]) do
+        {:ok, content} ->
+          {:ok,
+           %{
+             path: args["path"],
+             ref: rev,
+             size: byte_size(content),
+             binary: binary?(content),
+             content: if(binary?(content), do: Base.encode64(content), else: content),
+             encoding: if(binary?(content), do: "base64", else: "utf8")
+           }}
+
+        {:error, _} ->
+          {:error, "#{args["path"]} does not exist at #{rev}"}
+      end
+    end
+  end
+
+  defp list_tree_at(view, args) do
+    with {:ok, rev} <- public_revision(args["ref"], view) do
+      dir = args["path"] || ""
+      dir = if dir == "" or String.ends_with?(dir, "/"), do: dir, else: dir <> "/"
+
+      case Git.list_tree(view.path, rev, dir, recursive: args["recursive"] == true) do
+        {:ok, entries} ->
+          {:ok, %{ref: rev, path: args["path"] || "", entries: entries, count: length(entries)}}
+
+        {:error, _} ->
+          {:error, "could not list #{args["path"] || "/"} at #{rev}"}
+      end
+    end
+  end
+
+  defp search_at(view, args) do
+    with {:ok, rev} <- public_revision(args["ref"], view) do
+      opts = [
+        limit: args["limit"] || 100,
+        fixed: args["regex"] != true,
+        ignore_case: args["ignore_case"] == true,
+        path: args["path"]
+      ]
+
+      case Git.grep(view.path, rev, args["query"], opts) do
+        {:ok, matches} ->
+          {:ok, %{ref: rev, query: args["query"], matches: matches, count: length(matches)}}
+
+        {:error, reason} ->
+          {:error, "search failed: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  defp log_at(view, args) do
+    with {:ok, rev} <- public_revision(args["ref"], view) do
+      case Git.log(view.path, rev, limit: args["limit"] || 50, path: args["path"]) do
+        {:ok, commits} -> {:ok, %{ref: rev, commits: commits, count: length(commits)}}
+        {:error, _} -> {:error, "could not read history at #{rev}"}
+      end
+    end
+  end
+
+  defp diff_at(view, args) do
+    with {:ok, from} <- public_revision(args["from"], view),
+         {:ok, to} <- public_revision(args["to"], view) do
+      case Git.diff(view.path, from, to, path: args["path"], stat_only: args["stat_only"] == true) do
+        {:ok, diff} -> {:ok, %{from: from, to: to, diff: diff, empty: diff == ""}}
+        {:error, reason} -> {:error, "could not diff: #{inspect(reason)}"}
+      end
+    end
+  end
+
   defp point_branch(view, repo_id, branch, args, principal) do
     with {:ok, index, _etag} <- WAL.fetch(repo_id),
          {:ok, target} <- Git.resolve(view.path, args["target"]),
+         true <- Git.public_commit?(view.path, target),
          current = Index.ref(index, branch),
          :ok <- check_branch_free(branch, current, args["force"]) do
       command = %V1.RefCommand{ref: branch, old_oid: current, new_oid: target}
       apply_refs(repo_id, [command], principal, %{branch: branch, oid: target})
     else
+      false -> {:error, "reference not found"}
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> {:error, "could not resolve #{args["target"]}: #{inspect(reason)}"}
     end
@@ -543,7 +765,8 @@ defmodule Micelio.MCP.Tools do
   defp do_commit(view, repo_id, args, principal) do
     branch = normalize_branch(args["branch"])
 
-    with {:ok, index, _etag} <- WAL.fetch(repo_id),
+    with :ok <- public_reference(branch),
+         {:ok, index, _etag} <- WAL.fetch(repo_id),
          current = Index.ref(index, branch),
          :ok <- check_expected_head(current, args["expected_head"]),
          {:ok, changes} <- build_changes(view.path, args["changes"]),
@@ -675,9 +898,23 @@ defmodule Micelio.MCP.Tools do
     end
   end
 
-  defp revision(nil, view), do: view.head
-  defp revision("", view), do: view.head
-  defp revision(ref, _view), do: ref
+  defp public_revision(nil, view), do: {:ok, view.head}
+  defp public_revision("", view), do: {:ok, view.head}
+
+  defp public_revision(ref, view) do
+    with :ok <- public_reference(ref),
+         {:ok, commit} <- Git.resolve(view.path, ref),
+         true <- Git.public_commit?(view.path, commit) do
+      {:ok, ref}
+    else
+      false -> {:error, "reference not found"}
+      {:error, _reason} -> {:error, "reference not found"}
+    end
+  end
+
+  defp public_reference(ref) do
+    if Git.Ref.internal?(ref), do: {:error, "reference not found"}, else: :ok
+  end
 
   defp normalize_branch("refs/" <> _ = ref), do: ref
   defp normalize_branch(branch), do: "refs/heads/#{branch}"
@@ -686,6 +923,14 @@ defmodule Micelio.MCP.Tools do
 
   defp matches_pattern?(ref, pattern) do
     Micelio.Auth.Principal.matches?(pattern, ref)
+  end
+
+  defp issue_changes(args) do
+    [:title, :body, :state]
+    |> Enum.reduce(%{}, fn key, changes ->
+      value = args[Atom.to_string(key)]
+      if is_nil(value), do: changes, else: Map.put(changes, key, value)
+    end)
   end
 
   defp binary?(content), do: not String.valid?(content) or String.contains?(content, <<0>>)

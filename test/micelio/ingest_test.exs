@@ -12,6 +12,7 @@ defmodule Micelio.IngestTest do
   alias Micelio.Auth.Principal
   alias Micelio.Control
   alias Micelio.Ingest
+  alias Micelio.Issues
   alias Micelio.MCP.Tools
   alias Micelio.Replica
   alias Micelio.WAL
@@ -50,6 +51,38 @@ defmodule Micelio.IngestTest do
 
     assert {:error, message} = Ingest.commit(repo, commands: [command])
     assert message =~ "not a valid reference name"
+
+    {:ok, index, _etag} = WAL.fetch(repo)
+    assert index.seq == 0, "nothing should have been written"
+  end
+
+  test "a client cannot write Micelio's private references", %{repo: repo} do
+    command = %V1.RefCommand{
+      ref: Issues.ref(),
+      old_oid: Entry.zero_oid(),
+      new_oid: Entry.zero_oid()
+    }
+
+    assert {:error, message} = Ingest.commit(repo, commands: [command])
+    assert message =~ "reserved for Micelio"
+
+    {:ok, index, _etag} = WAL.fetch(repo)
+    assert index.seq == 0, "nothing should have been written"
+  end
+
+  test "a client cannot occupy the private reference namespace", %{repo: repo} do
+    command = %V1.RefCommand{
+      ref: "refs/micelio",
+      old_oid: Entry.zero_oid(),
+      new_oid: Entry.zero_oid()
+    }
+
+    assert {:error, message} = Ingest.commit(repo, commands: [command])
+    assert message =~ "reserved for Micelio"
+  end
+
+  test "the default branch cannot point at a private reference", %{repo: repo} do
+    assert {:error, :reserved_ref} = Ingest.set_head(repo, Issues.ref())
 
     {:ok, index, _etag} = WAL.fetch(repo)
     assert index.seq == 0, "nothing should have been written"

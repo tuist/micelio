@@ -3,7 +3,10 @@ defmodule Micelio.MCP.ServerTest do
 
   alias Micelio.Auth.Principal
   alias Micelio.Control
+  alias Micelio.Git
+  alias Micelio.Issues
   alias Micelio.MCP.Server
+  alias Micelio.Replica
 
   setup %{repo: repo, namespace: namespace} do
     start_replica_runtime()
@@ -132,6 +135,8 @@ defmodule Micelio.MCP.ServerTest do
     assert "read_file" in names
     assert "commit" in names
     assert "search" in names
+    assert "create_issue" in names
+    assert "add_issue_comment" in names
   end
 
   describe "authorization" do
@@ -274,6 +279,111 @@ defmodule Micelio.MCP.ServerTest do
 
       assert call_tool("read_file", %{"repository" => repo, "path" => "gone.txt"}, opts).isError
       refute call_tool("read_file", %{"repository" => repo, "path" => "kept.txt"}, opts)[:isError]
+    end
+  end
+
+  describe "issues" do
+    test "creates, changes, and reads comments through authorized tools", %{opts: opts, repo: repo} do
+      created =
+        call_tool(
+          "create_issue",
+          %{"repository" => repo, "title" => "Documentation", "body" => "Explain issue storage."},
+          opts
+        )
+
+      refute created[:isError], inspect(created)
+      assert created.structuredContent.issue.author.subject == "agent-1"
+      assert created.structuredContent.issue.number == 1
+
+      comment =
+        call_tool(
+          "add_issue_comment",
+          %{"repository" => repo, "issue" => 1, "body" => "I can take this."},
+          opts
+        )
+
+      refute comment[:isError], inspect(comment)
+      [first_comment] = comment.structuredContent.issue.comments
+
+      changed =
+        call_tool(
+          "update_issue_comment",
+          %{
+            "repository" => repo,
+            "issue" => 1,
+            "comment" => first_comment.id,
+            "body" => "I have taken this."
+          },
+          opts
+        )
+
+      refute changed[:isError], inspect(changed)
+      assert [%{body: "I have taken this."}] = changed.structuredContent.issue.comments
+
+      history = call_tool("issue_history", %{"repository" => repo, "issue" => 1}, opts)
+      refute history[:isError], inspect(history)
+
+      assert Enum.map(history.structuredContent.events, & &1.type) == [
+               "issue_opened",
+               "comment_added",
+               "comment_updated"
+             ]
+    end
+
+    test "does not expose the private issue reference through source tools", %{opts: opts, repo: repo} do
+      created =
+        call_tool(
+          "create_issue",
+          %{"repository" => repo, "title" => "Private state"},
+          opts
+        )
+
+      refute created[:isError]
+
+      refs = call_tool("list_refs", %{"repository" => repo}, opts)
+      refute Enum.any?(refs.structuredContent.refs, &(&1.ref == Issues.ref()))
+
+      result =
+        call_tool(
+          "read_file",
+          %{"repository" => repo, "ref" => Issues.ref(), "path" => "issues/1/state.json"},
+          opts
+        )
+
+      assert result.isError
+      assert hd(result.content).text =~ "reference not found"
+
+      assert {:ok, view} = Replica.ensure_fresh(repo)
+      assert {:ok, refs} = Git.refs(view.path)
+      private_commit = Map.fetch!(refs, Issues.ref())
+
+      result =
+        call_tool(
+          "read_file",
+          %{
+            "repository" => repo,
+            "ref" => private_commit,
+            "path" => "issues/1/state.json"
+          },
+          opts
+        )
+
+      assert result.isError
+      assert hd(result.content).text =~ "reference not found"
+
+      result =
+        call_tool(
+          "create_branch",
+          %{
+            "repository" => repo,
+            "branch" => "would-leak-issue-state",
+            "target" => private_commit
+          },
+          opts
+        )
+
+      assert result.isError
+      assert hd(result.content).text =~ "reference not found"
     end
   end
 

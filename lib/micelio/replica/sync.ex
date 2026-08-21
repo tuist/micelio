@@ -75,7 +75,10 @@ defmodule Micelio.Replica.Sync do
   # materializing one from the log is the ordinary way it comes into existence.
   defp ensure_repository(path, index) do
     if File.dir?(Path.join(path, "objects")) do
-      :ok
+      # A repository can outlive the Micelio release that materialized it. In
+      # particular, existing caches must gain the private-reference transport
+      # settings before this release writes issue state into them.
+      Git.configure_bare(path)
     else
       Git.init_bare(path, head: Index.head(index))
     end

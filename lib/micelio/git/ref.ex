@@ -21,6 +21,14 @@ defmodule Micelio.Git.Ref do
   """
 
   @control_characters 0..31
+  @internal_root "refs/micelio"
+
+  @doc "Whether a reference is reserved for Micelio's private state."
+  @spec internal?(term()) :: boolean()
+  def internal?(name) when is_binary(name),
+    do: name == @internal_root or String.starts_with?(name, @internal_root <> "/")
+
+  def internal?(_name), do: false
 
   @doc "Whether Git could represent this reference name."
   @spec valid?(term()) :: boolean()

@@ -35,6 +35,9 @@ defmodule Micelio.MixProject do
       {:plug, "~> 1.16"},
       {:req, "~> 0.5"},
 
+      # The public forge API is specified from the same schema it publishes.
+      {:open_api_spex, "~> 3.22"},
+
       # Every `git` invocation is a supervised OS process. MuonTrap ties the
       # child's lifetime to the owning BEAM process, so a crashed or killed
       # replica can never leave an orphaned upload-pack holding a repository
@@ -87,7 +90,7 @@ defmodule Micelio.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "docs/architecture.md", "docs/operations.md"]
+      extras: ["README.md", "docs/architecture.md", "docs/operations.md", "docs/issues.md"]
     ]
   end
 end

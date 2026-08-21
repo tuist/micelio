@@ -126,6 +126,21 @@ compare-and-swap, the same non-fast-forward checks, the same durability
 guarantee. There is no side door that bypasses the log. When the call returns,
 the commit is durable and ordered.
 
+### Issues
+
+| Tool | |
+|---|---|
+| `create_issue` | Open an issue with the verified caller as its author |
+| `list_issues` | Current issues in a repository |
+| `get_issue`, `update_issue`, `delete_issue` | Read, change, or tombstone an issue |
+| `add_issue_comment` | Add a verified-author comment |
+| `get_issue_comment`, `update_issue_comment`, `delete_issue_comment` | Read, change, or tombstone a comment |
+| `issue_history` | Immutable issue and comment events |
+
+Issues use the source repository's private Git history and the normal durable
+write path. See [issues.md](issues.md) for storage, concurrency, HTTP, and
+authorization details.
+
 ## Errors
 
 An ordinary failure — a branch moved, a file is missing — comes back as a tool

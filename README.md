@@ -97,6 +97,12 @@ round-robin Service, autoscaled like any stateless workload.
 - **Git smart HTTP** — clone, fetch, push, protocol v2, partial clone.
 - **An MCP server** — a headless Git forge for agents: read files, search, read
   history, and commit, all without cloning. See [docs/mcp.md](docs/mcp.md).
+- **Repository issues** — issues and comments persist alongside source history
+  in the same repository, with authorized
+  [Model Context Protocol](https://modelcontextprotocol.io/) and
+  [Hypertext Transfer Protocol](https://developer.mozilla.org/en-US/docs/Web/HTTP)
+  access. See
+  [docs/issues.md](docs/issues.md).
 - **OAuth 2.1 resource server** — validates tokens, never issues them. In
   Kubernetes an agent authenticates with the projected service account token it
   was born with, so no secret is ever distributed, and authorization lives in
@@ -147,6 +153,7 @@ docker compose up --build -d
 | [Operations](docs/operations.md) | Configuration, metrics, failure modes, capacity |
 | [Kubernetes](docs/kubernetes.md) | Deploying, autoscaling, and authenticating pods |
 | [MCP](docs/mcp.md) | The agent-facing surface |
+| [Issues](docs/issues.md) | Durable repository issues and comments |
 | [Multi-tenancy](docs/multi-tenancy.md) | Authentication, authorization, and what isolation you actually get |
 
 ## Development
