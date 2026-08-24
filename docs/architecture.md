@@ -177,18 +177,49 @@ A log that only grows makes materialization slower forever. Compaction collapses
 history into a new base: one `git repack`, a full ref snapshot, and an epoch
 bump. A replica seeing a higher epoch adopts the base rather than replaying.
 
-Only the preferred primary runs it, because repacking is CPU-bound and produces
-a deterministic artefact. Paying for it once and letting every replica download
-the result is strictly better than every replica recomputing the same packs.
-Replicas trade bandwidth for CPU, which is the right trade when bandwidth is
-elastic and CPU is the thing you are scaling reads with.
+Only the preferred maintenance-capable node runs it, because repacking is
+CPU-bound and produces a deterministic artefact. Paying for it once and letting
+every replica download the result is strictly better than every replica
+recomputing the same packs. Replicas trade bandwidth for CPU, which is the
+right trade when bandwidth is elastic and CPU is the thing you are scaling
+reads with.
 
-"Primary" is just the head of the rendezvous order. If two nodes both believe
-they are it, nothing breaks: compaction lands through the same CAS as everything
-else, so the loser is told `:raced` and does nothing. No lock, no election.
+The preferred owner is just the head of a rendezvous order over maintenance
+nodes. If two nodes both believe they are it, nothing breaks: compaction lands
+through the same conditional write as everything else, so the loser is told
+`:raced` and does nothing. No lock, no election.
 
 It is threshold-driven rather than scheduled. A repository nobody pushes to
 should never pay for maintenance.
+
+## Maintenance capabilities
+
+A node can advertise one or more capabilities:
+
+- `serve` joins replica placement and starts the Git and receive-pack-hook
+  listeners.
+- `maintain` joins compaction, bundle and lookup placement.
+- `events` reserves a separate placement group for durable event consumers.
+
+The default node has all three. A deployment may put `maintain` on dedicated
+nodes to keep repacks and lookup rebuilding off the request-serving path.
+Every role starts the internal administration, health, readiness, and metrics
+listener when listeners are enabled.
+Membership comes from the BEAM process group, but it is not a lock: process
+groups can temporarily disagree during a partition. Each maintenance job reads
+an exact (epoch, sequence, ETag) snapshot from object storage and can publish
+only against that ETag. A duplicate job therefore wastes compute at worst.
+
+The current implemented jobs are:
+
+- `compact`, which publishes a new write-ahead-log base conditionally;
+- `lookup`, which writes Git's local multi-pack lookup file when several packs
+  are present. This file is a disposable disk cache and is never uploaded.
+
+Bundle creation and external event delivery have scheduler slots but are not
+implemented yet. A public bundle needs a ref-selection and discovery contract;
+an event consumer needs subscriber identity, durable acknowledgement, retry and
+cursor contracts. Neither is safe to infer from a local cache job.
 
 ## Placement
 
@@ -225,6 +256,7 @@ On the BEAM most of it already exists:
 | Ad-hoc "which node is primary" | rendezvous hashing over live `:pg` membership |
 | Retry and backoff plumbing for lost packets | supervision and monitors |
 | Per-repository single-flight coordination | `Registry` + `DynamicSupervisor` + a GenServer mailbox |
+| Capability-specific heavy work placement | `:pg` groups plus rendezvous hashing, local supervisors and monitors |
 | Cross-node introspection RPC | `:erpc.call/4` |
 
 ### Why not Horde, Swarm, syn or libring

@@ -9,6 +9,7 @@ on:
       - "content/**"
       - "mise.toml"
       - "sass/**"
+      - "scripts/**"
       - "static/**"
       - "templates/**"
       - "wrangler.jsonc"
@@ -33,6 +34,9 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           install_args: "zola node npm:wrangler"
+
+      - name: Install headless Chrome for social-preview images
+        uses: browser-actions/setup-chrome@v1
 
       - name: Build the website
         run: mise run site

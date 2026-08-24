@@ -30,9 +30,9 @@ defmodule Micelio.HTTP.AdminRouter do
     send_json(conn, 200, %{status: "ok", node: Micelio.Config.node_id()})
   end
 
-  # Readiness means "can serve", which requires the object store to be
-  # reachable: a node that cannot read the log cannot answer consistently, and
-  # should be taken out of rotation rather than serve stale data.
+  # Readiness means this node can do its assigned work. Every role needs the
+  # object store: serving nodes read the log, and maintenance nodes derive and
+  # conditionally publish work from it.
   get "/ready" do
     case Micelio.ObjectStore.list("repos/") do
       {:ok, _} -> send_json(conn, 200, %{status: "ready"})
@@ -110,16 +110,22 @@ defmodule Micelio.HTTP.AdminRouter do
   post "/compact/*repo" do
     repo_id = Enum.join(conn.path_params["repo"], "/")
 
-    # Compaction belongs to the primary, so forward rather than refuse: an
-    # operator should not have to work out which pod to ask.
-    result =
-      Cluster.on_primary(repo_id, fn ->
-        Micelio.Replica.Compactor.compact(repo_id)
-      end)
+    # The maintenance capability, rather than a serving replica, owns
+    # compaction. That lets operators move expensive repacks to dedicated
+    # nodes without giving up the ability to ask any admin endpoint.
+    case Micelio.Maintenance.run(repo_id, :compact) do
+      {:ok, summary} -> send_json(conn, 200, summary)
+      :not_due -> send_json(conn, 200, %{repository: repo_id, compacted: false})
+      {:error, reason} -> send_json(conn, 409, %{error: inspect(reason)})
+    end
+  end
 
-    case result do
-      {:ok, {:ok, summary}} -> send_json(conn, 200, summary)
-      {:ok, {:error, reason}} -> send_json(conn, 409, %{error: inspect(reason)})
+  post "/lookup/*repo" do
+    repo_id = Enum.join(conn.path_params["repo"], "/")
+
+    case Micelio.Maintenance.run(repo_id, :lookup) do
+      {:ok, summary} -> send_json(conn, 200, summary)
+      :not_due -> send_json(conn, 200, %{repository: repo_id, rebuilt: false})
       {:error, reason} -> send_json(conn, 503, %{error: inspect(reason)})
     end
   end

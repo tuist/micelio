@@ -69,11 +69,11 @@ run = "iex -S mix"
 
 [tasks.site]
 description = "Build the Micelio website"
-run = "zola build"
+run = ["node scripts/generate-og-images.mjs", "zola build"]
 
 [tasks."site:serve"]
 description = "Serve the Micelio website locally"
-run = "zola serve"
+run = ["node scripts/generate-og-images.mjs", "zola serve"]
 
 [tasks."site:deploy"]
 description = "Build and deploy the Micelio website to Cloudflare Workers"

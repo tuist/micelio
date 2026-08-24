@@ -136,6 +136,18 @@ spec:
               value: {{ .Values.config.compactionEntryThreshold | int64 | quote }}
             - name: MICELIO_COMPACTION_BYTES_THRESHOLD
               value: {{ .Values.config.compactionBytesThreshold | int64 | quote }}
+            - name: MICELIO_ROLES
+              value: {{ .Values.config.roles | quote }}
+            - name: MICELIO_MAINTENANCE_COMPACTION_CONCURRENCY
+              value: {{ .Values.config.maintenanceCompactionConcurrency | int64 | quote }}
+            - name: MICELIO_MAINTENANCE_LOOKUP_CONCURRENCY
+              value: {{ .Values.config.maintenanceLookupConcurrency | int64 | quote }}
+            - name: MICELIO_MAINTENANCE_BUNDLE_CONCURRENCY
+              value: {{ .Values.config.maintenanceBundleConcurrency | int64 | quote }}
+            - name: MICELIO_MAINTENANCE_EVENTS_CONCURRENCY
+              value: {{ .Values.config.maintenanceEventsConcurrency | int64 | quote }}
+            - name: MICELIO_MAINTENANCE_SWEEP_MS
+              value: {{ .Values.config.maintenanceSweepMs | int64 | quote }}
             - name: MICELIO_IDLE_EVICTION_MS
               value: {{ .Values.config.idleEvictionMs | int64 | quote }}
             {{- with .Values.config.publicUrl }}

@@ -69,7 +69,10 @@ defmodule Micelio.Replica.Reaper do
         idle? = is_integer(info.last_verified_ms_ago) and info.last_verified_ms_ago > idle_after
         # A repository that moved away under rehashing is evicted regardless of
         # how recently it was touched: it now belongs somewhere else.
-        misplaced? = not Cluster.responsible?(repo_id)
+        # A maintenance-only node intentionally materializes repositories
+        # outside serving placement. It still evicts them when idle, but must
+        # not treat every completed job as immediately misplaced.
+        misplaced? = Config.serve?() and not Cluster.responsible?(repo_id)
 
         idle? or misplaced?
 

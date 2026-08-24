@@ -4,6 +4,16 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="{{ config.description }}">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="{{ config.title }}">
+    <meta property="og:description" content="{{ config.description }}">
+    <meta property="og:url" content="{{ section.permalink | safe }}">
+    <meta property="og:image" content="{{ get_url(path='og/index.png') }}">
+    <meta property="og:image:alt" content="Micelio">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ config.title }}">
+    <meta name="twitter:description" content="{{ config.description }}">
+    <meta name="twitter:image" content="{{ get_url(path='og/index.png') }}">
     <title>{{ config.title }}</title>
     <link rel="icon" type="image/png" href="{{ get_url(path='favicon.png') }}">
     <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
