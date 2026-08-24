@@ -1,13 +1,13 @@
 # Micelio
 
-Git hosting whose source of truth is a write-ahead log in object storage, not a
-disk.
+Headless & scalable Git forge. Its source of truth is a write-ahead log in
+object storage, not a disk.
 
 > [!WARNING]
-> **Micelio is experimental and is not proven in production.** It is under
+> **Micelio is alpha software and is not proven in production.** It is under
 > active development, and the log format, HTTP and MCP interfaces, and
-> configuration may all change in breaking ways between releases, possibly
-> without a migration path for data already in your object store.
+> configuration may change in breaking ways between releases, possibly without
+> a migration path for data already in your object store.
 >
 > Use it at your own responsibility. Keep independent backups of anything you
 > care about, and treat a Micelio deployment as the only copy of nothing. As the
