@@ -9,6 +9,7 @@ erl_crash.dump
 .elixir_ls/
 .elixir-tools/
 /public/
+/static/og/
 /.wrangler/
 /cloudflare.token
 

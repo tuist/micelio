@@ -1,9 +1,22 @@
 <!doctype html>
 <html lang="{{ config.default_language }}">
+{% set og_path = "og" ~ page.path ~ "index.png" %}
+{% set og_image = get_url(path=og_path) %}
+{% set description = page.description | default(value=config.description) %}
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="{{ config.description }}">
+    <meta name="description" content="{{ description }}">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="{{ page.title }} · {{ config.title }}">
+    <meta property="og:description" content="{{ description }}">
+    <meta property="og:url" content="{{ page.permalink | safe }}">
+    <meta property="og:image" content="{{ og_image | safe }}">
+    <meta property="og:image:alt" content="{{ page.title }}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ page.title }} · {{ config.title }}">
+    <meta name="twitter:description" content="{{ description }}">
+    <meta name="twitter:image" content="{{ og_image | safe }}">
     <title>{{ page.title }} · {{ config.title }}</title>
     <link rel="icon" type="image/png" href="{{ get_url(path='favicon.png') }}">
     <link rel="stylesheet" href="{{ get_url(path='site.css') }}">

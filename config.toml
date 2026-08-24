@@ -1,6 +1,6 @@
 base_url = "https://micelio.dev"
 title = "Micelio"
-description = "A headless Git forge whose source of truth is a write-ahead log in object storage."
+description = "Headless & scalable Git forge backed by a write-ahead log in object storage."
 default_language = "en"
 compile_sass = true
 build_search_index = false
