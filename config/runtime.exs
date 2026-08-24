@@ -124,6 +124,17 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
     policy_staleness_budget_ms: String.to_integer(get.("MICELIO_POLICY_STALENESS_BUDGET_MS", "5000")),
     compaction_entry_threshold: String.to_integer(get.("MICELIO_COMPACTION_ENTRY_THRESHOLD", "250")),
     compaction_bytes_threshold: String.to_integer(get.("MICELIO_COMPACTION_BYTES_THRESHOLD", "268435456")),
+    # A node may serve, perform cache maintenance, reserve event-consumer
+    # placement, or combine those capabilities. Placement uses only nodes that
+    # advertise the relevant capability; the log remains authoritative
+    # whichever node runs a job.
+    roles: get.("MICELIO_ROLES", "serve,maintain,events"),
+    maintenance_compaction_concurrency:
+      String.to_integer(get.("MICELIO_MAINTENANCE_COMPACTION_CONCURRENCY", "1")),
+    maintenance_lookup_concurrency: String.to_integer(get.("MICELIO_MAINTENANCE_LOOKUP_CONCURRENCY", "1")),
+    maintenance_bundle_concurrency: String.to_integer(get.("MICELIO_MAINTENANCE_BUNDLE_CONCURRENCY", "1")),
+    maintenance_events_concurrency: String.to_integer(get.("MICELIO_MAINTENANCE_EVENTS_CONCURRENCY", "4")),
+    maintenance_sweep_ms: String.to_integer(get.("MICELIO_MAINTENANCE_SWEEP_MS", "300000")),
     idle_eviction_ms: String.to_integer(get.("MICELIO_IDLE_EVICTION_MS", "3600000")),
     public_url: System.get_env("MICELIO_PUBLIC_URL"),
     resource_identifier: System.get_env("MICELIO_RESOURCE_IDENTIFIER"),

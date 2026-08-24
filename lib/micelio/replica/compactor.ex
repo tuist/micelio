@@ -58,7 +58,7 @@ defmodule Micelio.Replica.Compactor do
   @spec compact(String.t()) :: {:ok, map()} | {:error, term()}
   def compact(repo_id) do
     if Cluster.primary?(repo_id) do
-      do_compact(repo_id)
+      run(repo_id, :force)
     else
       {:error, :not_primary}
     end
@@ -67,14 +67,23 @@ defmodule Micelio.Replica.Compactor do
   @doc "Compact `repo_id` if its log has grown past the configured thresholds."
   @spec maybe_compact(String.t()) :: {:ok, map()} | {:error, term()} | :not_due
   def maybe_compact(repo_id) do
-    with true <- Cluster.primary?(repo_id) or {:error, :not_primary},
-         {:ok, index, _etag} <- WAL.fetch(repo_id),
-         true <- due?(index) or :not_due do
-      do_compact(repo_id)
+    with true <- Cluster.primary?(repo_id) or {:error, :not_primary}, do: run(repo_id, :if_due)
+  end
+
+  @doc false
+  @spec run(String.t(), :force | :if_due) :: {:ok, map()} | {:error, term()} | :not_due
+  def run(repo_id, mode) do
+    with {:ok, index, etag} <- WAL.fetch(repo_id),
+         :ok <- due?(mode, index) do
+      compact_snapshot(repo_id, index, etag)
     else
+      false -> :not_due
       other -> other
     end
   end
+
+  defp due?(:force, _index), do: :ok
+  defp due?(:if_due, index), do: if(due?(index), do: :ok, else: false)
 
   defp due?(index) do
     Index.compaction_due?(index,
@@ -83,13 +92,16 @@ defmodule Micelio.Replica.Compactor do
     )
   end
 
-  defp do_compact(repo_id) do
+  # The index and ETag are a maintenance snapshot. A push after this point is
+  # not "merged" into the repack: the conditional write rejects the stale
+  # snapshot, and the scheduler later plans a fresh job. That keeps a
+  # partition or a duplicated job to wasted compute rather than lost history.
+  defp compact_snapshot(repo_id, index, etag) do
     started = System.monotonic_time(:millisecond)
 
     # Compact from a repository that is already caught up, otherwise the repack
     # would produce a base missing the most recent pushes.
     with {:ok, view} <- Replica.ensure_fresh(repo_id),
-         {:ok, index, etag} <- WAL.fetch(repo_id),
          :ok <- ensure_caught_up(view, index),
          {:ok, packs} <- Git.repack(view.path),
          {:ok, refs} <- Git.refs(view.path),

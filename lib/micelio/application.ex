@@ -34,6 +34,8 @@ defmodule Micelio.Application do
         # One writer per repository, batching its index updates.
         {Registry, keys: :unique, name: Micelio.WriterRegistry},
         {DynamicSupervisor, strategy: :one_for_one, name: Micelio.WriterSupervisor},
+        maintenance_runtime_children(),
+        maintenance_scheduler_children(),
         auth_children(),
         {Micelio.Auth.JWKS, []},
         # Authorization policy lives in object storage like everything else;
@@ -66,13 +68,19 @@ defmodule Micelio.Application do
   # an instruction.
   defp check_ports do
     if Config.start_listeners?() do
-      [
-        {"git and MCP", Config.git_port(), "MICELIO_GIT_PORT", []},
-        # The hook listener binds loopback only, so the probe has to as well:
-        # a port can be free on one interface and taken on another.
-        {"receive-pack hook", Config.hook_port(), "MICELIO_HOOK_PORT", [ip: {127, 0, 0, 1}]},
-        {"admin and metrics", Config.admin_port(), "MICELIO_ADMIN_PORT", []}
-      ]
+      ports =
+        if Config.serve?() do
+          [
+            {"git and MCP", Config.git_port(), "MICELIO_GIT_PORT", []},
+            # The hook listener binds loopback only, so the probe has to as well:
+            # a port can be free on one interface and taken on another.
+            {"receive-pack hook", Config.hook_port(), "MICELIO_HOOK_PORT", [ip: {127, 0, 0, 1}]}
+          ]
+        else
+          []
+        end
+
+      (ports ++ [{"admin and metrics", Config.admin_port(), "MICELIO_ADMIN_PORT", []}])
       |> Enum.each(fn {purpose, port, variable, options} ->
         # Deliberately without `reuseaddr`: it would let this bind succeed
         # alongside the very listener we are trying to detect, which is the
@@ -112,53 +120,66 @@ defmodule Micelio.Application do
   end
 
   defp maintenance_children do
-    if Config.start_listeners?() do
-      [
-        {Micelio.Replica.Compactor, []},
-        {Micelio.Replica.Reaper, []}
-      ]
+    if Config.serve?() or Config.maintain?() do
+      [{Micelio.Replica.Reaper, []}]
     else
       []
     end
   end
 
+  # Maintenance jobs are local supervised processes. Their durable input and
+  # publication point remain the object store; this registry merely prevents
+  # one node from running the same expensive job twice at once.
+  defp maintenance_runtime_children do
+    [
+      {Registry, keys: :unique, name: Micelio.MaintenanceRegistry},
+      {DynamicSupervisor, strategy: :one_for_one, name: Micelio.MaintenanceSupervisor}
+    ]
+  end
+
   defp listener_children do
     if Config.start_listeners?() do
-      [
-        # Public: Git smart HTTP, MCP, OAuth discovery.
-        #
-        # A clone can run for many minutes and a push can be gigabytes, so the
-        # read timeout is raised well above what an ordinary web listener would
-        # want. Named so the metrics plugin can count live connections, which
-        # is the signal an autoscaler should use.
-        listener(Micelio.HTTP.Public,
-          plug: Micelio.HTTP.Router,
-          port: Config.git_port(),
-          thousand_island_options: [
-            num_acceptors: 100,
-            read_timeout: :timer.minutes(30),
-            transport_options: [backlog: 1024]
-          ],
-          # Compression is off deliberately. Bandit will gzip a response when the
-          # client offers to accept it, and every git client does — but the Git
-          # protocol carries packfiles, which are already compressed, so this
-          # spends CPU to make responses slightly larger. Worse, git parses the
-          # reference advertisement itself and stalls when it arrives encoded,
-          # which presents as a push that hangs rather than an error.
-          http_options: [log_protocol_errors: false, compress: false]
-        ),
+      public_listeners =
+        if Config.serve?() do
+          [
+            # Public: Git smart HTTP, MCP, OAuth discovery.
+            #
+            # A clone can run for many minutes and a push can be gigabytes, so the
+            # read timeout is raised well above what an ordinary web listener would
+            # want. Named so the metrics plugin can count live connections, which
+            # is the signal an autoscaler should use.
+            listener(Micelio.HTTP.Public,
+              plug: Micelio.HTTP.Router,
+              port: Config.git_port(),
+              thousand_island_options: [
+                num_acceptors: 100,
+                read_timeout: :timer.minutes(30),
+                transport_options: [backlog: 1024]
+              ],
+              # Compression is off deliberately. Bandit will gzip a response when the
+              # client offers to accept it, and every git client does — but the Git
+              # protocol carries packfiles, which are already compressed, so this
+              # spends CPU to make responses slightly larger. Worse, git parses the
+              # reference advertisement itself and stalls when it arrives encoded,
+              # which presents as a push that hangs rather than an error.
+              http_options: [log_protocol_errors: false, compress: false]
+            ),
 
-        # Loopback only: the pre-receive hook's callback. This endpoint can
-        # commit a push, so it must not be reachable from outside the node.
-        listener(Micelio.HTTP.Hook,
-          plug: Micelio.HTTP.HookRouter,
-          port: Config.hook_port(),
-          ip: {127, 0, 0, 1}
-        ),
+            # Loopback only: the pre-receive hook's callback. This endpoint can
+            # commit a push, so it must not be reachable from outside the node.
+            listener(Micelio.HTTP.Hook,
+              plug: Micelio.HTTP.HookRouter,
+              port: Config.hook_port(),
+              ip: {127, 0, 0, 1}
+            )
+          ]
+        else
+          []
+        end
 
-        # Operations: health, readiness, metrics, repository administration.
-        listener(Micelio.HTTP.Admin, plug: Micelio.HTTP.AdminRouter, port: Config.admin_port())
-      ]
+      # Operations: health, readiness, metrics, repository administration.
+      public_listeners ++
+        [listener(Micelio.HTTP.Admin, plug: Micelio.HTTP.AdminRouter, port: Config.admin_port())]
     else
       []
     end
@@ -196,6 +217,10 @@ defmodule Micelio.Application do
     end
   end
 
+  defp maintenance_scheduler_children do
+    if Config.maintenance?(), do: [{Micelio.Maintenance, []}], else: []
+  end
+
   # Discovery only. libcluster's job ends once nodes can see each other;
   # membership, failure detection and message delivery are the BEAM's.
   defp libcluster_child do
@@ -209,6 +234,7 @@ defmodule Micelio.Application do
     Logger.info("""
     micelio #{Micelio.version()} starting
       node:         #{Config.node_id()} (#{node()})
+      roles:        #{Enum.join(Config.roles(), ", ")}
       data dir:     #{Config.data_dir()}
       object store: #{Config.object_store() |> elem(0) |> inspect()}
       auth:         #{Config.auth() |> elem(0) |> inspect()}

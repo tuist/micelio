@@ -37,6 +37,12 @@ exist, and Micelio will not be safe.
 | `MICELIO_STALENESS_BUDGET_MS` | `0` | See below |
 | `MICELIO_COMPACTION_ENTRY_THRESHOLD` | `250` | |
 | `MICELIO_COMPACTION_BYTES_THRESHOLD` | `268435456` | |
+| `MICELIO_ROLES` | `serve,maintain,events` | Comma-separated node capabilities |
+| `MICELIO_MAINTENANCE_COMPACTION_CONCURRENCY` | `1` | Repack jobs per maintenance node |
+| `MICELIO_MAINTENANCE_LOOKUP_CONCURRENCY` | `1` | Multi-pack lookup rebuilds per maintenance node |
+| `MICELIO_MAINTENANCE_BUNDLE_CONCURRENCY` | `1` | Reserved for bundle creation, which is not implemented |
+| `MICELIO_MAINTENANCE_EVENTS_CONCURRENCY` | `4` | Reserved for event delivery, which is not implemented |
+| `MICELIO_MAINTENANCE_SWEEP_MS` | `300000` | How often resident repositories are considered |
 | `MICELIO_IDLE_EVICTION_MS` | `3600000` | Drop untouched repositories from disk |
 | `MICELIO_DATA_DIR` | `/var/lib/micelio/repositories` | Put this on fast local NVMe |
 
@@ -50,6 +56,24 @@ Raising it lets a replica serve from its cached view for that long without
 checking. This is a real trade, not a tuning knob: a client that pushes to node
 A and immediately fetches from node B may not see its own write. Only raise it
 if you know the workload tolerates that.
+
+### Maintenance roles
+
+The default `serve,maintain,events` role set is appropriate for a small
+deployment. At larger sizes, a dedicated maintenance deployment can set
+`MICELIO_ROLES=maintain` and share the same object store and distributed Erlang
+cluster. It receives no public listeners and never joins replica placement, so
+Git repacks remain isolated from clone and push traffic.
+
+The maintenance deployment still starts its internal administration, health,
+readiness, and metrics listener. Keep that listener reachable to Kubernetes and
+your metrics collector; it does not start the Git or receive-pack-hook
+listeners.
+
+`events` currently reserves placement for a future durable event consumer. It
+does not enable outgoing delivery by itself. The bundle and event concurrency
+settings are reserved configuration only. Bundle creation and event delivery
+are intentionally unavailable until their public contracts are implemented.
 
 ### Clustering
 

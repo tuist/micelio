@@ -265,6 +265,18 @@ defmodule Micelio.Git do
   end
 
   @doc """
+  Rebuild Git's multi-pack lookup file for a materialized repository.
+
+  This is cache-only maintenance. The file makes object lookup across several
+  packs cheaper, but deleting it is harmless: Git falls back to the individual
+  pack indexes and the next maintenance pass can recreate it.
+  """
+  @spec rebuild_multi_pack_index(path()) :: :ok | {:error, term()}
+  def rebuild_multi_pack_index(repo_path) do
+    with {:ok, _} <- run(repo_path, ["multi-pack-index", "write"], timeout: :timer.minutes(10)), do: :ok
+  end
+
+  @doc """
   Repack the repository into as few packfiles as possible.
 
   This is the expensive half of compaction and the reason only one node runs

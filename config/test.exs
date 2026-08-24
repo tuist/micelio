@@ -7,6 +7,9 @@ config :micelio,
   # starts without listeners so the suite can run several isolated clusters.
   start_listeners: false,
   start_gossip: false,
+  # Background scheduler tests start an explicitly named, process-local
+  # scheduler. The application itself must not start one shared by async tests.
+  roles: [:serve],
   data_dir: {:system_tmp, "micelio-test-repositories"},
   object_store: {Micelio.ObjectStore.Filesystem, root: {:system_tmp, "micelio-test-object-store"}},
   auth: {Micelio.Auth.Static, tokens: %{"test-token" => %{account: "test", scopes: [:read, :write]}}},

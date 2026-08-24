@@ -108,6 +108,50 @@ defmodule Micelio.Config do
   @spec compaction_bytes_threshold() :: pos_integer()
   def compaction_bytes_threshold, do: get(:compaction_bytes_threshold, 256 * 1024 * 1024)
 
+  @typedoc "A capability a node advertises to the rest of the cluster."
+  @type role :: :serve | :maintain | :events
+
+  @roles [:serve, :maintain, :events]
+
+  @doc """
+  Capabilities enabled on this node.
+
+  Roles are deliberately capabilities, not an assignment recorded anywhere:
+  changing a deployment changes the members visible to rendezvous hashing, and
+  the next job naturally moves to an eligible node. The write-ahead log stays
+  the source of truth regardless of which capability produced a cache entry.
+  """
+  @spec roles() :: [role()]
+  def roles do
+    :roles
+    |> get(@roles)
+    |> normalize_roles()
+  end
+
+  @spec serve?() :: boolean()
+  def serve?, do: :serve in roles()
+
+  @spec maintain?() :: boolean()
+  def maintain?, do: :maintain in roles()
+
+  @spec events?() :: boolean()
+  def events?, do: :events in roles()
+
+  @doc "Whether this node starts the local maintenance scheduler."
+  @spec maintenance?() :: boolean()
+  def maintenance?, do: maintain?() or events?()
+
+  @doc "Maximum concurrent jobs of one maintenance kind on this node."
+  @spec maintenance_concurrency(:compact | :lookup | :bundle | :events) :: pos_integer()
+  def maintenance_concurrency(:compact), do: get(:maintenance_compaction_concurrency, 1)
+  def maintenance_concurrency(:lookup), do: get(:maintenance_lookup_concurrency, 1)
+  def maintenance_concurrency(:bundle), do: get(:maintenance_bundle_concurrency, 1)
+  def maintenance_concurrency(:events), do: get(:maintenance_events_concurrency, 4)
+
+  @doc "How often the local scheduler considers already-resident repositories."
+  @spec maintenance_sweep_ms() :: pos_integer()
+  def maintenance_sweep_ms, do: get(:maintenance_sweep_ms, :timer.minutes(5))
+
   @doc "Evict a repository from local disk after this long without traffic."
   @spec idle_eviction_ms() :: pos_integer()
   def idle_eviction_ms, do: get(:idle_eviction_ms, :timer.hours(1))
@@ -240,6 +284,32 @@ defmodule Micelio.Config do
       {:ok, value} -> value
       :error -> Application.get_env(@app, key, default)
     end
+  end
+
+  defp normalize_roles(roles) when is_binary(roles) do
+    roles
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> normalize_roles()
+  end
+
+  defp normalize_roles(roles) when is_list(roles) do
+    roles
+    |> Enum.map(&normalize_role!/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_roles(other) do
+    raise ArgumentError, "roles must be a list or comma-separated string, got: #{inspect(other)}"
+  end
+
+  defp normalize_role!(role) when role in @roles, do: role
+  defp normalize_role!("serve"), do: :serve
+  defp normalize_role!("maintain"), do: :maintain
+  defp normalize_role!("events"), do: :events
+
+  defp normalize_role!(role) do
+    raise ArgumentError, "unknown Micelio role: #{inspect(role)}"
   end
 
   defp expand_opts(opts) do

@@ -40,12 +40,12 @@ defmodule Micelio.Cluster do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @doc "Nodes currently ready to serve repositories, including this one."
+  @doc "Nodes currently ready to serve repositories."
   @spec members() :: [node()]
   def members do
-    case :pg.get_members(@scope, @group) do
-      [] -> [node()]
-      pids -> pids |> Enum.map(&node/1) |> Enum.uniq() |> Enum.sort()
+    case group_members() do
+      [] -> if(Config.serve?(), do: [node()], else: [])
+      nodes -> nodes
     end
   end
 
@@ -91,9 +91,14 @@ defmodule Micelio.Cluster do
   def announce(repo_id, epoch, seq) do
     message = {:wal_advanced, repo_id, epoch, seq, node()}
 
-    for pid <- :pg.get_members(@scope, @group), node(pid) != node() do
+    for pid <- group_pids(), node(pid) != node() do
       send(pid, message)
     end
+
+    # Maintenance has its own capability group. A serving node must not pull a
+    # CPU-heavy job onto itself merely because it accepted a push, and a
+    # maintenance-only node must not pretend to serve repositories.
+    Micelio.Maintenance.announce(repo_id, epoch, seq)
 
     :telemetry.execute([:micelio, :cluster, :announce], %{seq: seq}, %{repo_id: repo_id, epoch: epoch})
     :ok
@@ -120,7 +125,7 @@ defmodule Micelio.Cluster do
 
   @impl true
   def init(_opts) do
-    :pg.join(@scope, @group, self())
+    if Config.serve?(), do: :pg.join(@scope, @group, self())
     :net_kernel.monitor_nodes(true, node_type: :visible)
     {:ok, %{}}
   end
@@ -159,4 +164,22 @@ defmodule Micelio.Cluster do
 
   @doc false
   def group, do: @group
+
+  defp group_members do
+    group_pids()
+    |> Enum.map(&node/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  # A test may deliberately run without distributed membership. The serving
+  # fallback above is enough for that single-node case; an absent process group
+  # must not turn a local read into an exception.
+  defp group_pids do
+    :pg.get_members(@scope, @group)
+  rescue
+    ArgumentError -> []
+  catch
+    :exit, _reason -> []
+  end
 end

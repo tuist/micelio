@@ -122,6 +122,17 @@ config:
 
   compactionEntryThreshold: 250
   compactionBytesThreshold: 268435456
+  # Comma-separated node capabilities. The default single Deployment performs
+  # every role; a dedicated maintenance Deployment can use extraEnv to set
+  # this to "maintain" and keep expensive Git work off serving pods.
+  roles: "serve,maintain,events"
+  maintenanceCompactionConcurrency: 1
+  maintenanceLookupConcurrency: 1
+  # Reserved until Micelio publishes a bundle contract.
+  maintenanceBundleConcurrency: 1
+  # Reserved until Micelio publishes a durable event-delivery contract.
+  maintenanceEventsConcurrency: 4
+  maintenanceSweepMs: 300000
   idleEvictionMs: 3600000
 
   # Advertised to clients and used as the OAuth resource identifier.
