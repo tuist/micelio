@@ -13,7 +13,7 @@
       },
       strict: true,
       checks: %{
-        enabled: [
+        extra: [
           # A depth of two forces plumbing code into a chain of tiny private
           # functions that has to be read backwards. Three is enough to keep a
           # `case` inside a `with` inside a function readable in one place.
