@@ -36,7 +36,7 @@ jobs:
           install_args: "zola node npm:wrangler"
 
       - name: Install headless Chrome for social-preview images
-        uses: browser-actions/setup-chrome@v1
+        uses: browser-actions/setup-chrome@v2
 
       - name: Build the website
         run: mise run site
