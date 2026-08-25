@@ -36,7 +36,7 @@ jobs:
       latest-version: ${{ steps.detect.outputs.latest-version }}
       next-version: ${{ steps.detect.outputs.next-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@v2
@@ -64,7 +64,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux/arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -158,7 +158,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       - uses: jdx/mise-action@v2
         with:
@@ -182,7 +182,7 @@ jobs:
       # Creating a release creates a tag, which is a write to contents.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@v2

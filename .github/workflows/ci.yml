@@ -18,7 +18,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
         with:
           version: ${{ env.MISE_VERSION }}
@@ -40,7 +40,7 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
         with:
           version: ${{ env.MISE_VERSION }}
@@ -59,7 +59,7 @@ jobs:
     name: End-to-end
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
         with:
           version: ${{ env.MISE_VERSION }}
@@ -89,7 +89,7 @@ jobs:
     name: Schema is up to date
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
         with:
           version: ${{ env.MISE_VERSION }}
@@ -111,7 +111,7 @@ jobs:
     # the Dockerfile does not vary on.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Build
         uses: docker/build-push-action@v6
@@ -167,7 +167,7 @@ jobs:
     name: Helm chart
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       - run: helm lint charts/micelio --set objectStore.endpoint=http://minio:9000 --set auth.oidc.audience=micelio
       - name: Render with autoscaling and ingress enabled
@@ -188,7 +188,7 @@ jobs:
     name: Chart deploys and serves
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       # Three workers, not one. A single-node cluster cannot show pods
       # spreading, placement agreeing across machines, or a repository being
