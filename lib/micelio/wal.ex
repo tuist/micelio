@@ -239,7 +239,8 @@ defmodule Micelio.WAL do
   rejected, and the rest still land. Results come back in the order given.
   """
   @spec append_batch(repo_id(), [prepared()]) ::
-          {:ok, [{:ok, non_neg_integer()} | {:error, term()}]} | {:error, term()}
+          {:ok, [{:ok, %{seq: non_neg_integer(), epoch: non_neg_integer()}} | {:error, term()}]}
+          | {:error, term()}
   def append_batch(repo_id, prepared), do: append_batch(repo_id, prepared, @cas_attempts)
 
   defp append_batch(_repo_id, _prepared, 0), do: {:error, :cas_exhausted}
@@ -292,17 +293,37 @@ defmodule Micelio.WAL do
   end
 
   # Fold the batch in order, so each entry sees the ref state left by the ones
-  # before it.
+  # before it. An entry already present in the index is a previously successful
+  # conditional write whose response was lost. Returning its original position
+  # is essential: blindly appending it again would make a group commit visible
+  # twice after an ambiguous response.
   defp apply_batch(index, prepared) do
-    {index, results} =
-      Enum.reduce(prepared, {index, []}, fn item, {index, results} ->
-        case item.validate.(index) do
-          :ok ->
-            updated = Index.append(index, item.entry, item.key, item.size, item.digest, Config.node_id())
-            {updated, [{:ok, %{seq: updated.seq, epoch: updated.epoch}} | results]}
+    # A batch can contain 256 pushes and the active log can contain many more
+    # entries. Indexing the current digests once avoids rescanning the whole
+    # log for every push while preserving the first sequence number if a legacy
+    # index already has duplicate pointers from an older writer.
+    committed = Enum.reduce(index.entries, %{}, &Map.put_new(&2, &1.digest, &1.seq))
 
-          {:error, reason} ->
-            {index, [{:error, reason} | results]}
+    {index, _committed, results} =
+      Enum.reduce(prepared, {index, committed, []}, fn item, {index, committed, results} ->
+        case Map.fetch(committed, item.digest) do
+          :error ->
+            case item.validate.(index) do
+              :ok ->
+                updated = Index.append(index, item.entry, item.key, item.size, item.digest, Config.node_id())
+
+                {
+                  updated,
+                  Map.put(committed, item.digest, updated.seq),
+                  [{:ok, %{seq: updated.seq, epoch: updated.epoch}} | results]
+                }
+
+              {:error, reason} ->
+                {index, committed, [{:error, reason} | results]}
+            end
+
+          {:ok, seq} ->
+            {index, committed, [{:ok, %{seq: seq, epoch: index.epoch}} | results]}
         end
       end)
 

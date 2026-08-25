@@ -102,6 +102,48 @@ defmodule Micelio.WALFailureTest do
       assert index.seq == 1, "the entry must be installed exactly once"
       assert length(index.entries) == 1
     end
+
+    test "a group commit whose response was lost is reported once, not appended twice", %{repo: repo} do
+      {:ok, _} = WAL.create(repo)
+
+      entries = [
+        push_entry(),
+        Entry.new(
+          type: :ENTRY_TYPE_PUSH,
+          commands: [Entry.command("refs/heads/other", Entry.zero_oid(), String.duplicate("b", 40))]
+        )
+      ]
+
+      prepared =
+        Enum.map(entries, fn entry ->
+          {:ok, item} = WAL.prepare(repo, entry, fn _index -> :ok end)
+          item
+        end)
+
+      committed = :counters.new(1, [])
+
+      stub(ObjectStore, :put, fn key, body, opts ->
+        cas? = String.ends_with?(key, "index.pb") and Keyword.has_key?(opts, :if_match)
+
+        if cas? and :counters.get(committed, 1) == 0 do
+          :counters.add(committed, 1, 1)
+          # Apply the whole group, then make the caller retry as if it had lost
+          # the race. The retry must recognize both content-addressed entries.
+          Mimic.call_original(ObjectStore, :put, [key, body, Keyword.delete(opts, :if_match)])
+          {:error, :precondition_failed}
+        else
+          Mimic.call_original(ObjectStore, :put, [key, body, opts])
+        end
+      end)
+
+      assert {:ok, [{:ok, %{seq: 1, epoch: 1}}, {:ok, %{seq: 2, epoch: 1}}]} =
+               WAL.append_batch(repo, prepared)
+
+      {:ok, index, _etag} = WAL.fetch(repo)
+      assert index.seq == 2, "the group must be installed exactly once"
+      assert length(index.entries) == 2
+      assert Enum.uniq_by(index.entries, & &1.digest) == index.entries
+    end
   end
 
   describe "storage failures" do
