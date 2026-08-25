@@ -14,7 +14,7 @@ protoc = "35.1"
 shellspec = "0.28.1"
 # Releases are cut from conventional commits; see mise/tasks/release.
 git-cliff = "2.13.1"
-helm = "3.19.0"
+helm = "3.21.4"
 # The project website is a static Zola site deployed to Cloudflare Workers.
 zola = "0.22.1"
 # Cloudflare deployment tooling for the static website.
