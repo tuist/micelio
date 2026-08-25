@@ -28,10 +28,12 @@ defmodule Micelio.HTTP.WorkRunsRouter do
   end
 
   get "/:run/events" do
-    with {:ok, after_revision} <- after_revision(conn) do
-      with_run(conn, run, :read, fn repo_id, _principal -> Factory.events(repo_id, run, after_revision) end)
-    else
-      {:error, message} -> error(conn, 422, "micelio: #{message}")
+    case after_revision(conn) do
+      {:ok, after_revision} ->
+        with_run(conn, run, :read, fn repo_id, _principal -> Factory.events(repo_id, run, after_revision) end)
+
+      {:error, message} ->
+        error(conn, 422, "micelio: #{message}")
     end
   end
 

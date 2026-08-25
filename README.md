@@ -162,6 +162,7 @@ docker compose up --build -d
 mise run test      # unit tests
 mise run e2e       # end-to-end, needs Docker for MinIO
 mise run lint      # formatting and Credo
+mise run typecheck # static type analysis
 mise run proto     # regenerate the log schema after editing priv/proto
 ```
 

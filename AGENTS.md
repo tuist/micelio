@@ -22,12 +22,13 @@ mise run setup     # deps, first time
 mise run test      # unit tests
 mise run e2e       # end-to-end against a real server and real S3; needs Docker
 mise run lint      # mix format --check-formatted, then Credo --strict
+mise run typecheck # static type analysis
 mise run proto     # regenerate schemas after editing priv/proto
 mise run server    # a single node, locally
 ```
 
-`mise run lint` and `mise run test` both have to pass before you commit. The e2e
-suite is slower and needs Docker, but run it for anything touching the Git
+`mise run lint`, `mise run test` and `mise run typecheck` all have to pass before
+you commit. The e2e suite is slower and needs Docker, but run it for anything touching the Git
 protocol, the object store, replication or auth — it is the only place the real
 S3 semantics and the real `git` client are exercised.
 

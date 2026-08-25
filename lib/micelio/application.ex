@@ -22,6 +22,10 @@ defmodule Micelio.Application do
   def start(_type, _args) do
     Micelio.Telemetry.attach()
     Micelio.Telemetry.setup_opentelemetry()
+    # The receive-pack hook inherits this secret from its request process. Set
+    # it once during serial application startup so concurrent first pushes can
+    # never race to publish different values.
+    Config.hook_token()
     log_boot()
     check_ports()
 

@@ -55,6 +55,25 @@ jobs:
       - run: mix deps.get
       - run: mix test
 
+  typecheck:
+    name: Static type analysis
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "erlang elixir"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-typecheck-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-typecheck-
+      - run: mix deps.get
+      - run: mix dialyzer --format github
+
   e2e:
     name: End-to-end
     runs-on: ubuntu-24.04

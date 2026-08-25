@@ -63,6 +63,10 @@ run = ["./spec/support/stack.sh up", "shellspec", "./spec/support/stack.sh down"
 description = "Check formatting and run Credo"
 run = ["mix format --check-formatted", "mix credo --strict"]
 
+[tasks.typecheck]
+description = "Run static type analysis"
+run = "mix dialyzer --format short"
+
 [tasks.server]
 description = "Run a single node against the local filesystem object store"
 run = "iex -S mix"

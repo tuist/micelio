@@ -117,7 +117,26 @@ defmodule Micelio.MCP.ServerTest do
   end
 
   test "an unknown method is a protocol error", %{opts: opts} do
-    assert {:reply, %{error: %{code: -32601}}} = request("nonsense/method", %{}, opts)
+    assert {:reply, %{error: %{code: -32_601}}} = request("nonsense/method", %{}, opts)
+  end
+
+  test "normalizes unknown methods before recording metrics", %{opts: opts} do
+    handler = {__MODULE__, :unknown_method_metric, self()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:micelio, :mcp, :request],
+        fn _event, _measurements, metadata, pid ->
+          if self() == pid, do: send(pid, {:unknown_method_metric, metadata})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:reply, %{error: %{code: -32_601}}} = request("unknown/tenant-controlled-method", %{}, opts)
+    assert_receive {:unknown_method_metric, %{method: "unknown", outcome: :error}}
   end
 
   test "tools/list describes every tool with a schema", %{opts: opts} do
@@ -663,7 +682,7 @@ defmodule Micelio.MCP.ServerTest do
     end
 
     test "rejects an unrecognised uri", %{opts: opts} do
-      assert {:reply, %{error: %{code: -32602}}} =
+      assert {:reply, %{error: %{code: -32_602}}} =
                request("resources/read", %{"uri" => "http://elsewhere"}, opts)
     end
   end

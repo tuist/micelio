@@ -35,20 +35,23 @@ defmodule Micelio.Git.Ref do
   def valid?(name) when is_binary(name) do
     components = String.split(name, "/")
 
+    valid_shape?(name) and valid_components?(components) and no_forbidden_characters?(name)
+  end
+
+  def valid?(_name), do: false
+
+  defp valid_shape?(name) do
     String.length(name) > 0 and
+      name != "@" and
       not String.starts_with?(name, "/") and
       not String.ends_with?(name, "/") and
       not String.ends_with?(name, ".") and
       not String.contains?(name, "..") and
-      not String.contains?(name, "@{") and
-      name != "@" and
-      length(components) > 1 and
-      Enum.all?(components, &valid_component?/1) and
-      not String.contains?(name, "//") and
-      no_forbidden_characters?(name)
+      not String.contains?(name, "@{")
   end
 
-  def valid?(_name), do: false
+  defp valid_components?(components),
+    do: length(components) > 1 and Enum.all?(components, &valid_component?/1)
 
   defp valid_component?(component) do
     component != "" and

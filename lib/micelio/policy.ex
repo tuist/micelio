@@ -56,6 +56,8 @@ defmodule Micelio.Policy do
   part of why machine identities should use them.
   """
 
+  use GenServer
+
   require Logger
 
   alias Micelio.Auth.Principal
@@ -71,17 +73,30 @@ defmodule Micelio.Policy do
   @type t :: V1.Policy.t()
 
   @doc false
-  @spec start_link(keyword()) :: {:ok, pid()}
-  def start_link(_opts) do
-    Task.start_link(fn ->
-      # Idempotent, so starting a second cache (a test running against an
-      # already-booted application) is a no-op rather than a crash.
-      if :ets.whereis(@cache) == :undefined do
-        :ets.new(@cache, [:named_table, :public, :set, read_concurrency: true])
-      end
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-      Process.sleep(:infinity)
-    end)
+  @impl true
+  def init(_opts) do
+    # The cache must exist before the supervisor reports this child as started.
+    # A task that creates it later adds a boot race to every authorization
+    # request and gives the table's lifetime no explicit owner.
+    table = cache_table()
+
+    {:ok, table}
+  end
+
+  defp cache_table do
+    case :ets.whereis(@cache) do
+      :undefined -> create_cache_table()
+      table -> table
+    end
+  end
+
+  defp create_cache_table do
+    :ets.new(@cache, [:named_table, :public, :set, read_concurrency: true])
+  rescue
+    ArgumentError -> :ets.whereis(@cache)
   end
 
   @doc false
@@ -242,40 +257,12 @@ defmodule Micelio.Policy do
   defp update(_account, _update, 0), do: {:error, :cas_exhausted}
 
   defp update(account, update, attempts) do
-    {current, etag} =
-      case ObjectStore.get(key(account)) do
-        {:ok, body, etag} ->
-          case decode(body) do
-            {:ok, policy} -> {policy, etag}
-            {:error, _} -> {empty(account), etag}
-          end
+    {current, etag} = current_policy(account)
+    updated = update_policy(current, update)
 
-        _ ->
-          {empty(account), nil}
-      end
-
-    now = System.system_time(:millisecond)
-
-    updated = %{
-      current
-      | bindings: update.(current.bindings),
-        version: current.version + 1,
-        updated_at_ms: now,
-        updated_by: Config.node_id(),
-        created_at_ms: if(current.created_at_ms == 0, do: now, else: current.created_at_ms)
-    }
-
-    condition = if etag, do: [if_match: etag], else: [if_none_match: "*"]
-
-    case ObjectStore.put(key(account), encode(updated), [content_type: @content_type] ++ condition) do
+    case put_policy(account, updated, etag) do
       {:ok, new_etag} ->
-        touch(account, new_etag, updated)
-
-        :telemetry.execute([:micelio, :policy, :updated], %{bindings: length(updated.bindings)}, %{
-          account: account
-        })
-
-        {:ok, updated}
+        cache_update(account, updated, new_etag)
 
       {:error, :precondition_failed} ->
         # Somebody else changed the policy between our read and our write; redo
@@ -290,6 +277,48 @@ defmodule Micelio.Policy do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp current_policy(account) do
+    case ObjectStore.get(key(account)) do
+      {:ok, body, etag} -> {decode_current(account, body), etag}
+      _ -> {empty(account), nil}
+    end
+  end
+
+  defp decode_current(account, body) do
+    case decode(body) do
+      {:ok, policy} -> policy
+      {:error, _} -> empty(account)
+    end
+  end
+
+  defp update_policy(current, update) do
+    now = System.system_time(:millisecond)
+
+    %{
+      current
+      | bindings: update.(current.bindings),
+        version: current.version + 1,
+        updated_at_ms: now,
+        updated_by: Config.node_id(),
+        created_at_ms: if(current.created_at_ms == 0, do: now, else: current.created_at_ms)
+    }
+  end
+
+  defp put_policy(account, policy, etag) do
+    condition = if etag, do: [if_match: etag], else: [if_none_match: "*"]
+    ObjectStore.put(key(account), encode(policy), [content_type: @content_type] ++ condition)
+  end
+
+  defp cache_update(account, policy, etag) do
+    touch(account, etag, policy)
+
+    :telemetry.execute([:micelio, :policy, :updated], %{bindings: length(policy.bindings)}, %{
+      account: account
+    })
+
+    {:ok, policy}
   end
 
   @doc "Grant a subject permissions over repository patterns."

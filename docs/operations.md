@@ -31,8 +31,8 @@ exist, and Micelio will not be safe.
 ### Behaviour
 
 | Variable | Default | Notes |
-| `MICELIO_MAX_PORTS` | `65536` | Ceiling on concurrent Git streams and connections. Raising it costs memory: the BEAM pre-allocates the whole table, and a container's default file-descriptor limit would otherwise make that 1.5 GB |
 |---|---|---|
+| `MICELIO_MAX_PORTS` | `65536` | Ceiling on concurrent Git streams and connections. Raising it costs memory: the BEAM pre-allocates the whole table, and a container's default file-descriptor limit would otherwise make that 1.5 GB |
 | `MICELIO_DEFAULT_REPLICAS` | `3` | Per-repository, overridable |
 | `MICELIO_STALENESS_BUDGET_MS` | `0` | See below |
 | `MICELIO_COMPACTION_ENTRY_THRESHOLD` | `250` | |
@@ -278,8 +278,9 @@ curl -XPUT  :4002/replicas/acme/app -d '{"replicas":30}'
 ```
 
 `GET /repositories/<id>` is the one to reach for first when something is wrong.
-It reports the log's position and each replica's position, so "which nodes are
-behind, and by how much" is one request.
+It reports the log's position, each replica's position, and the ages of its
+last verification and last access. That makes "which nodes are behind, and by
+how much" and "is this cache actively used" answerable in one request.
 
 ## Failure modes
 

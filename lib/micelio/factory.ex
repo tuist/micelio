@@ -26,6 +26,9 @@ defmodule Micelio.Factory do
   @default_lease_duration_ms 30 * 60 * 1_000
 
   @type result :: {:ok, map()} | {:error, String.t()}
+  @type node_id :: String.t()
+  @type dependency_graph :: %{optional(node_id()) => [node_id()]}
+  @type visited_nodes :: %{optional(node_id()) => true}
 
   @doc "Create an immutable work specification and its initial graph state."
   @spec create(String.t(), map(), map(), Principal.t()) :: result()
@@ -153,11 +156,17 @@ defmodule Micelio.Factory do
     with :ok <- run_id(run_id),
          :ok <- node_id(node_id),
          :ok <- attempt_id(attempt_id) do
-      transition(
-        repo_id,
-        run_id,
-        &complete_update(repo_id, run_id, node_id, attempt_id, outcome, artifacts, principal, &1, &2)
-      )
+      completion = %{
+        repo_id: repo_id,
+        run_id: run_id,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        outcome: outcome,
+        artifacts: artifacts,
+        principal: principal
+      }
+
+      transition(repo_id, run_id, &complete_update(completion, &1, &2))
     end
   end
 
@@ -349,36 +358,25 @@ defmodule Micelio.Factory do
     end
   end
 
-  defp complete_update(repo_id, run_id, node_id, attempt_id, outcome, artifacts, principal, manifest, state) do
-    with {:ok, node} <- node(state, node_id),
-         :ok <- claimed_attempt(repo_id, run_id, node_id, attempt_id, principal),
-         {:ok, disposition} <- attempt_disposition(node, attempt_id),
-         {:ok, artifacts} <- artifacts(artifacts) do
+  defp complete_update(completion, manifest, state) do
+    with {:ok, node} <- node(state, completion.node_id),
+         :ok <- claimed_attempt(completion),
+         {:ok, disposition} <- attempt_disposition(node, completion.attempt_id),
+         {:ok, artifacts} <- artifacts(completion.artifacts) do
       result = %{
         "version" => 1,
-        "attempt" => attempt_id,
-        "run_id" => run_id,
-        "node" => node_id,
-        "outcome" => outcome,
+        "attempt" => completion.attempt_id,
+        "run_id" => completion.run_id,
+        "node" => completion.node_id,
+        "outcome" => completion.outcome,
         "artifacts" => artifacts,
         "recorded_at_ms" => now(),
-        "recorded_by" => actor(principal)
+        "recorded_by" => actor(completion.principal)
       }
 
-      case put_result(repo_id, run_id, attempt_id, result) do
+      case put_result(completion.repo_id, completion.run_id, completion.attempt_id, result) do
         :ok ->
-          finalize_attempt(
-            state,
-            manifest,
-            node,
-            node_id,
-            attempt_id,
-            outcome,
-            artifacts,
-            principal,
-            result,
-            disposition
-          )
+          finalize_attempt(state, manifest, node, completion, result, disposition)
 
         {:error, reason} ->
           {:error, error_message(reason)}
@@ -451,35 +449,46 @@ defmodule Micelio.Factory do
     depends_on = raw["depends_on"] || raw[:depends_on] || []
     execution = raw["execution"] || raw[:execution]
 
-    cond do
-      not valid_identifier?(id) ->
-        {:halt, {:error, "every work node needs a simple id"}}
+    with :ok <- node_id_valid?(id),
+         :ok <- node_kind_valid?(kind),
+         :ok <- node_title_valid?(title),
+         :ok <- dependencies_valid?(id, depends_on),
+         {:ok, execution} <- normalize_node_execution(id, execution) do
+      node =
+        %{"id" => id, "kind" => kind, "title" => title, "depends_on" => depends_on}
+        |> maybe_put("execution", execution)
 
-      kind not in ["agent", "command", "evaluate", "approval"] ->
-        {:halt, {:error, "unknown work node kind #{inspect(kind)}"}}
-
-      not is_binary(title) or title == "" ->
-        {:halt, {:error, "every work node needs a title"}}
-
-      not is_list(depends_on) or Enum.any?(depends_on, &(not valid_identifier?(&1))) ->
-        {:halt, {:error, "node #{id} has invalid dependencies"}}
-
-      true ->
-        case normalize_execution(execution) do
-          {:ok, execution} ->
-            node =
-              %{"id" => id, "kind" => kind, "title" => title, "depends_on" => depends_on}
-              |> maybe_put("execution", execution)
-
-            {:cont, {:ok, acc ++ [node]}}
-
-          {:error, reason} ->
-            {:halt, {:error, "node #{id} #{reason}"}}
-        end
+      {:cont, {:ok, acc ++ [node]}}
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 
   defp normalize_node(_raw, _acc), do: {:halt, {:error, "every work node must be an object"}}
+
+  defp node_id_valid?(id),
+    do: if(valid_identifier?(id), do: :ok, else: {:error, "every work node needs a simple id"})
+
+  defp node_kind_valid?(kind) when kind in ["agent", "command", "evaluate", "approval"], do: :ok
+  defp node_kind_valid?(kind), do: {:error, "unknown work node kind #{inspect(kind)}"}
+
+  defp node_title_valid?(title) when is_binary(title) and title != "", do: :ok
+  defp node_title_valid?(_title), do: {:error, "every work node needs a title"}
+
+  defp dependencies_valid?(id, dependencies) when is_list(dependencies) do
+    if Enum.all?(dependencies, &valid_identifier?/1),
+      do: :ok,
+      else: {:error, "node #{id} has invalid dependencies"}
+  end
+
+  defp dependencies_valid?(id, _dependencies), do: {:error, "node #{id} has invalid dependencies"}
+
+  defp normalize_node_execution(id, execution) do
+    case normalize_execution(execution) do
+      {:ok, normalized} -> {:ok, normalized}
+      {:error, reason} -> {:error, "node #{id} #{reason}"}
+    end
+  end
 
   # The factory carries a portable operation contract, not an agent session,
   # provider credential, or model selection. A worker maps `operation` to a
@@ -494,31 +503,41 @@ defmodule Micelio.Factory do
     output_schema = raw["output_schema"] || raw[:output_schema]
     inference_profile = raw["inference_profile"] || raw[:inference_profile]
 
-    cond do
-      type != "condukt_operation" ->
-        {:error, "has an unknown execution type"}
-
-      not valid_operation?(operation) ->
-        {:error, "needs a Condukt operation name"}
-
-      not is_map(input) ->
-        {:error, "has a Condukt operation input that is not an object"}
-
-      not is_nil(output_schema) and not is_map(output_schema) ->
-        {:error, "has a Condukt operation output schema that is not an object"}
-
-      not is_nil(inference_profile) and not valid_identifier?(inference_profile) ->
-        {:error, "has an invalid inference profile name"}
-
-      true ->
-        {:ok,
-         %{"type" => type, "operation" => operation, "input" => input}
-         |> maybe_put("output_schema", output_schema)
-         |> maybe_put("inference_profile", inference_profile)}
+    with :ok <- execution_type_valid?(type),
+         :ok <- execution_operation_valid?(operation),
+         :ok <- execution_input_valid?(input),
+         :ok <- optional_output_schema_valid?(output_schema),
+         :ok <- optional_inference_profile_valid?(inference_profile) do
+      {:ok,
+       %{"type" => type, "operation" => operation, "input" => input}
+       |> maybe_put("output_schema", output_schema)
+       |> maybe_put("inference_profile", inference_profile)}
     end
   end
 
   defp normalize_execution(_), do: {:error, "has an execution that is not an object"}
+
+  defp execution_type_valid?("condukt_operation"), do: :ok
+  defp execution_type_valid?(_type), do: {:error, "has an unknown execution type"}
+
+  defp execution_operation_valid?(operation) do
+    if valid_operation?(operation), do: :ok, else: {:error, "needs a Condukt operation name"}
+  end
+
+  defp execution_input_valid?(input) when is_map(input), do: :ok
+  defp execution_input_valid?(_input), do: {:error, "has a Condukt operation input that is not an object"}
+
+  defp optional_output_schema_valid?(nil), do: :ok
+  defp optional_output_schema_valid?(value) when is_map(value), do: :ok
+
+  defp optional_output_schema_valid?(_value),
+    do: {:error, "has a Condukt operation output schema that is not an object"}
+
+  defp optional_inference_profile_valid?(nil), do: :ok
+
+  defp optional_inference_profile_valid?(value) do
+    if valid_identifier?(value), do: :ok, else: {:error, "has an invalid inference profile name"}
+  end
 
   # A run stores only the selected profile and its immutable version. The
   # credential binding stays out of repository-readable graph state and work
@@ -560,11 +579,12 @@ defmodule Micelio.Factory do
       else: {:error, "every work-node dependency must exist"}
   end
 
+  @spec acyclic([map()]) :: :ok | {:error, String.t()}
   defp acyclic(nodes) do
-    graph = Map.new(nodes, &{&1["id"], &1["depends_on"]})
+    graph = dependency_graph(nodes)
 
-    case Enum.reduce_while(Map.keys(graph), MapSet.new(), fn id, done ->
-           case visit(id, graph, done, MapSet.new()) do
+    case Enum.reduce_while(Map.keys(graph), %{}, fn id, done ->
+           case visit(id, graph, done, %{}) do
              {:ok, done} -> {:cont, done}
              :cycle -> {:halt, :cycle}
            end
@@ -574,16 +594,21 @@ defmodule Micelio.Factory do
     end
   end
 
+  @spec dependency_graph([map()]) :: dependency_graph()
+  defp dependency_graph(nodes), do: Map.new(nodes, &{&1["id"], &1["depends_on"]})
+
+  @spec visit(node_id(), dependency_graph(), visited_nodes(), visited_nodes()) ::
+          {:ok, visited_nodes()} | :cycle
   defp visit(id, graph, done, visiting) do
     cond do
-      MapSet.member?(done, id) ->
+      Map.has_key?(done, id) ->
         {:ok, done}
 
-      MapSet.member?(visiting, id) ->
+      Map.has_key?(visiting, id) ->
         :cycle
 
       true ->
-        visiting = MapSet.put(visiting, id)
+        visiting = Map.put(visiting, id, true)
 
         Enum.reduce_while(Map.fetch!(graph, id), {:ok, done}, fn dependency, {:ok, done} ->
           case visit(dependency, graph, done, visiting) do
@@ -592,7 +617,7 @@ defmodule Micelio.Factory do
           end
         end)
         |> case do
-          {:ok, done} -> {:ok, MapSet.put(done, id)}
+          {:ok, done} -> {:ok, Map.put(done, id, true)}
           :cycle -> :cycle
         end
     end
@@ -671,14 +696,16 @@ defmodule Micelio.Factory do
     Map.put(state, "nodes", nodes)
   end
 
-  defp claimed_attempt(repo_id, run_id, node_id, attempt_id, principal) do
-    with {:ok, claim} <- read_json(claim_key(repo_id, run_id, attempt_id)),
-         true <- claim["id"] == attempt_id and claim["run_id"] == run_id and claim["node"] == node_id,
-         true <- claim["claimed_by"] == actor(principal) do
+  defp claimed_attempt(completion) do
+    with {:ok, claim} <- read_json(claim_key(completion.repo_id, completion.run_id, completion.attempt_id)),
+         true <-
+           claim["id"] == completion.attempt_id and claim["run_id"] == completion.run_id and
+             claim["node"] == completion.node_id,
+         true <- claim["claimed_by"] == actor(completion.principal) do
       :ok
     else
       false -> {:error, "attempt belongs to a different executor identity"}
-      {:error, :not_found} -> {:error, "attempt #{attempt_id} not found"}
+      {:error, :not_found} -> {:error, "attempt #{completion.attempt_id} not found"}
       {:error, reason} -> {:error, "could not read work attempt: #{inspect(reason)}"}
     end
   end
@@ -702,19 +729,12 @@ defmodule Micelio.Factory do
     end
   end
 
-  defp finalize_attempt(
-         state,
-         manifest,
-         node,
-         node_id,
-         attempt_id,
-         outcome,
-         artifacts,
-         principal,
-         result,
-         disposition
-       ) do
-    payload = %{"node" => node_id, "attempt" => attempt_id, "artifacts" => artifacts}
+  defp finalize_attempt(state, manifest, node, completion, result, disposition) do
+    payload = %{
+      "node" => completion.node_id,
+      "attempt" => completion.attempt_id,
+      "artifacts" => completion.artifacts
+    }
 
     case {disposition, state["status"]} do
       {:accepted, _status} ->
@@ -726,35 +746,40 @@ defmodule Micelio.Factory do
       {:current, "active"} ->
         updated_node =
           node
-          |> Map.put("status", outcome)
-          |> Map.put("result_attempt", attempt_id)
+          |> Map.put("status", completion.outcome)
+          |> Map.put("result_attempt", completion.attempt_id)
           |> Map.delete("attempt_id")
           |> Map.delete("executor")
           |> Map.delete("claimed_by")
 
         updated =
           state
-          |> put_node(node_id, updated_node)
+          |> put_node(completion.node_id, updated_node)
           |> refresh_ready_nodes(manifest)
           |> finish_if_complete()
 
-        {:ok, updated, {"attempt_#{outcome}", actor(principal), payload, %{result: result, accepted: true}}}
+        {:ok, updated,
+         {"attempt_#{completion.outcome}", actor(completion.principal), payload,
+          %{result: result, accepted: true}}}
 
       {:current, status} ->
-        reject_attempt(state, node, node_id, attempt_id, principal, payload, result, "work run is #{status}")
+        reject_attempt(state, node, completion, payload, result, "work run is #{status}")
 
       {:expired, _status} ->
-        reject_attempt(state, node, node_id, attempt_id, principal, payload, result, "attempt lease expired")
+        reject_attempt(state, node, completion, payload, result, "attempt lease expired")
     end
   end
 
-  defp reject_attempt(state, node, node_id, attempt_id, principal, payload, result, reason) do
+  defp reject_attempt(state, node, completion, payload, result, reason) do
     updated =
       state
-      |> put_node(node_id, append_attempt(node, "rejected_result_attempt_ids", attempt_id))
+      |> put_node(
+        completion.node_id,
+        append_attempt(node, "rejected_result_attempt_ids", completion.attempt_id)
+      )
 
     {:ok, updated,
-     {"attempt_rejected", actor(principal), Map.put(payload, "reason", reason),
+     {"attempt_rejected", actor(completion.principal), Map.put(payload, "reason", reason),
       %{result: result, accepted: false}}}
   end
 

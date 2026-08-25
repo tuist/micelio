@@ -36,9 +36,8 @@ defmodule Micelio.HTTP.SecretBackendsRouter do
          {:ok, conn} <- AuthPlug.authorize(conn, repository, :admin) do
       account = Policy.account_of(repository)
 
-      with {:ok, conn} <- AuthPlug.authorize_account(conn, account, :admin) do
-        respond(conn, fun.(account))
-      else
+      case AuthPlug.authorize_account(conn, account, :admin) do
+        {:ok, conn} -> respond(conn, fun.(account))
         {:halt, conn} -> conn
       end
     else
