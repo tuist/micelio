@@ -19,7 +19,7 @@ helm = "3.19.0"
 zola = "0.22.1"
 # Cloudflare deployment tooling for the static website.
 node = "26.7.0"
-"npm:wrangler" = "4.124.0"
+"npm:wrangler" = "4.125.0"
 
 [env]
 # Never pin MIX_ENV here: `mix test` only switches to :test when MIX_ENV is
