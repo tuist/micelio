@@ -105,7 +105,7 @@ if config_env() == :prod or System.get_env("MICELIO_S3_BUCKET") do
   config :micelio,
     node_id: get.("MICELIO_NODE_ID", nil) || :inet.gethostname() |> elem(1) |> to_string(),
     advertise_host: get.("MICELIO_ADVERTISE_HOST", "127.0.0.1"),
-    data_dir: get.("MICELIO_DATA_DIR", "/var/lib/code/repositories"),
+    data_dir: get.("MICELIO_DATA_DIR", "/var/lib/micelio/repositories"),
     object_store: object_store,
     auth: auth,
     git_port: port.("MICELIO_GIT_PORT", "4000"),
