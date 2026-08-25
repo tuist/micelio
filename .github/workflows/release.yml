@@ -159,7 +159,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - uses: jdx/mise-action@v2
         with:
           version: ${{ env.MISE_VERSION }}
