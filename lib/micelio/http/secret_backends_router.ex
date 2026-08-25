@@ -1,11 +1,11 @@
-defmodule Micelio.HTTP.InferenceProfilesRouter do
+defmodule Micelio.HTTP.SecretBackendsRouter do
   @moduledoc false
 
   use Plug.Router
 
   import Plug.Conn
 
-  alias Micelio.Factory.InferenceProfile
+  alias Micelio.Factory.SecretBackend
   alias Micelio.HTTP.AuthPlug
   alias Micelio.Policy
 
@@ -14,16 +14,16 @@ defmodule Micelio.HTTP.InferenceProfilesRouter do
   plug(:dispatch)
 
   get "/" do
-    with_account(conn, fn account -> InferenceProfile.list(account) end)
+    with_account(conn, fn account -> SecretBackend.list(account) end)
   end
 
-  get "/:profile" do
-    with_account(conn, fn account -> InferenceProfile.get(account, profile) end)
+  get "/:backend" do
+    with_account(conn, fn account -> SecretBackend.get(account, backend) end)
   end
 
-  put "/:profile" do
+  put "/:backend" do
     with_account(conn, fn account ->
-      InferenceProfile.put(account, profile, conn.body_params, conn.assigns.principal)
+      SecretBackend.put(account, backend, conn.body_params, conn.assigns.principal)
     end)
   end
 
@@ -31,9 +31,6 @@ defmodule Micelio.HTTP.InferenceProfilesRouter do
     error(conn, 404, "micelio: endpoint not found")
   end
 
-  # A repository identifies the account but is not the authorization anchor:
-  # account configuration needs an administrator grant that spans the account,
-  # not merely one repository in it.
   defp with_account(conn, fun) do
     with {:ok, repository, conn} <- repository(conn),
          {:ok, conn} <- AuthPlug.authorize(conn, repository, :admin) do

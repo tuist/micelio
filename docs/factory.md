@@ -45,10 +45,27 @@ outcome. This is intentionally compatible with a mocked worker: tests can
 claim the node, make a deterministic code change, and report success with no
 inference endpoint or session at all.
 
-### Account inference profiles
+### Account secret backends and inference profiles
 
-An account administrator may create a named inference profile and reference it
-from an operation using `inference_profile`:
+An account administrator first binds its account to the deployment-managed
+[Infisical](https://infisical.com/) service. The binding is versioned and only
+contains the tenant-facing project identifier:
+
+```json
+{
+  "driver": "managed_infisical",
+  "project": "acme-production"
+}
+```
+
+The Infisical address, the workload-token audience, and the trust relationship
+with the Kubernetes cluster are deployment configuration, not account input.
+This prevents an account administrator from asking a sandbox to project a
+workload token for an arbitrary receiver. Micelio does not create, rotate, or
+delete Infisical machine identities.
+
+An account administrator may then create a named inference profile and
+reference it from an operation using `inference_profile`:
 
 ```json
 {
@@ -60,50 +77,50 @@ from an operation using `inference_profile`:
 }
 ```
 
-Micelio persists versioned, non-secret configuration such as the endpoint,
-model, credential-delivery method, and a logical secret reference. For example,
-an executor driver that can exchange a sandbox identity with a secret manager
-may be configured as:
+Micelio persists the endpoint, model, and a version-pinned, non-secret
+credential binding. For example:
 
 ```json
 {
   "endpoint": "https://inference.example.com/v1",
   "model": "coding-model",
-  "credential_source": {
-    "type": "secret_manager",
-    "driver": "infisical",
-    "endpoint": "https://secrets.example.com",
-    "secret": {"reference": "/production/coding", "field": "api_key"},
-    "authentication": {"type": "workload_identity", "audience": "micelio-workers"}
+  "credential_binding": {
+    "backend": "production",
+    "identity_id": "coding-machine-identity",
+    "secret": {"reference": "/production/coding", "field": "api_key"}
   }
 }
 ```
 
-`driver` is a worker-image capability, not code Micelio executes. The initial
-worker can instead request an already mounted value without naming a provider:
+The binding pins the backend's immutable version with the profile. Secret
+values, bearer tokens, provider endpoints, workload-token audiences, and user
+information in inference endpoints are rejected.
 
-```json
-{
-  "credential_source": {
-    "type": "injected_secret",
-    "reference": "account-coding-api-key"
-  }
-}
-```
+Micelio does not resolve this binding. A work claim returns only the profile
+name, version, inference endpoint, and model. It does not return the backend,
+machine identity, or logical secret reference.
 
-For a provider that requires a static bootstrap credential, use a
-`secret_manager` source with `authentication.type` set to `injected_secret`.
-Its `reference` identifies a value that the sandbox provisioner must mount; it
-is never the value itself. This makes the bootstrap dependency explicit rather
-than pretending every provider accepts a Kubernetes identity token.
+### Trusted runtime delivery
 
-Secret values, bearer tokens, and user information in endpoints are rejected.
-Micelio does not resolve either credential-source form. A future worker image
-implements its selected driver and receives any plaintext credential only in
-its sandbox. The profile interface is deliberately provider-neutral, so an
-adapter for [Infisical](https://infisical.com/) or
-[1Password](https://1password.com/) can be added without changing graph or
-storage semantics.
+The Kubernetes provisioner and a Condukt egress proxy are outside Micelio and
+are **not implemented by this repository**. Their required contract is:
+
+1. The provisioner reads the immutable profile and backend configuration from
+   object storage using the profile version already pinned in the work-run
+   specification. It derives the Kubernetes service account from that
+   configuration, not from the worker's claim payload.
+2. Only the egress proxy receives that service account's projected token. The
+   repository-command container and the Condukt agent process do not receive
+   it.
+3. The proxy exchanges the projected token directly with the managed Infisical
+   service, obtains the inference credential, and injects it into the outbound
+   inference request. It never exposes the credential to the model, tool
+   environment, session history, or Micelio.
+
+This arrangement means the secret manager and Kubernetes are runtime
+dependencies for factory work, but not for Git clone, fetch, push, or Micelio
+claim coordination. A later backend driver can extend the account backend
+schema without changing the graph or storage semantics.
 
 Micelio accepts a base commit only when it is the current head of a public
 repository reference at creation time. When a worker claims a node, Micelio
@@ -124,6 +141,8 @@ factory/acme/app/runs/r1/attempts/<attempt-id>/claim.json
 factory/acme/app/runs/r1/attempts/<attempt-id>/result.json
 accounts/acme/factory/inference-profiles/coding/current.json
 accounts/acme/factory/inference-profiles/coding/versions/<profile-version>.json
+accounts/acme/factory/secret-backends/production/current.json
+accounts/acme/factory/secret-backends/production/versions/<backend-version>.json
 ```
 
 Specifications, claims, results, and events are immutable. `state.json` is the
@@ -152,16 +171,16 @@ change the terminal outcome.
 ## Observation and control
 
 The [Representational State Transfer API](https://en.wikipedia.org/wiki/REST)
-is under `/api/work-runs` and `/api/inference-profiles`, and is described by
-`/api/openapi.json`. It provides creation, list and get, events, attempts,
-claim, complete, approval, expiry, cancellation, and account-profile
-configuration. Existing repository read permission is required to observe a
-run. Repository write permission creates work. Repository `execute` permission
-claims and completes work, and is required before Micelio returns a pinned
-profile's credential-delivery metadata. Repository administrator permission
-approves, expires, cancels, and configures profiles. The repository query
-parameter is the account-configuration authorization anchor: Micelio does not
-yet have a standalone account-owner registry.
+is under `/api/work-runs`, `/api/inference-profiles`, and
+`/api/secret-backends`, and is described by `/api/openapi.json`. It provides
+creation, list and get, events, attempts, claim, complete, approval, expiry,
+cancellation, and account configuration. Existing repository read permission is
+required to observe a run. Repository write permission creates work. Repository
+`execute` permission claims and completes work, but does not reveal a profile's
+credential binding. Repository administrator permission approves, expires, and
+cancels work. Account configuration additionally requires an administrator
+grant spanning the whole account, for example `acme/**`; an administrator grant
+on one repository is insufficient.
 
 The verified principal that completes an attempt must be the same principal
 that claimed it. A repository administrator can cancel or approve work, but
@@ -176,9 +195,10 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) exposes the same
 contract through `create_work_run`, `list_work_runs`, `get_work_run`,
 `work_run_events`, `claim_work_node`, `complete_work_attempt`,
 `approve_work_node`, `cancel_work_run`, `expire_work_node`, and
-`get_work_attempt`, as well as `configure_inference_profile`,
-`list_inference_profiles`, and `get_inference_profile` for account
-administrators.
+`get_work_attempt`, as well as `configure_secret_backend`,
+`list_secret_backends`, `get_secret_backend`,
+`configure_inference_profile`, `list_inference_profiles`, and
+`get_inference_profile` for account administrators.
 
 Events are revision-cursored immutable records. A client can poll events after
 the most recent `next_cursor`, reconstruct the canonical graph state, and link

@@ -31,6 +31,8 @@ defmodule Micelio.HTTP.ApiSpec do
           "WorkEvents" => work_events_schema(),
           "InferenceProfile" => inference_profile_schema(),
           "InferenceProfileList" => inference_profile_list_schema(),
+          "SecretBackend" => secret_backend_schema(),
+          "SecretBackendList" => secret_backend_list_schema(),
           "Error" => error_schema()
         }
       }
@@ -179,6 +181,35 @@ defmodule Micelio.HTTP.ApiSpec do
             request_body: inference_profile_input_schema(),
             tags: ["Inference profiles"]
           )
+      },
+      "/api/secret-backends" => %PathItem{
+        get:
+          operation(
+            "listSecretBackends",
+            "List account secret backends",
+            [repository_parameter()],
+            secret_backend_list_schema(),
+            tags: ["Secret backends"]
+          )
+      },
+      "/api/secret-backends/{backend}" => %PathItem{
+        get:
+          operation(
+            "getSecretBackend",
+            "Get account secret backend",
+            secret_backend_parameters(),
+            secret_backend_schema(),
+            tags: ["Secret backends"]
+          ),
+        put:
+          operation(
+            "putSecretBackend",
+            "Create or replace account secret backend",
+            secret_backend_parameters(),
+            secret_backend_schema(),
+            request_body: secret_backend_input_schema(),
+            tags: ["Secret backends"]
+          )
       }
     }
   end
@@ -233,6 +264,10 @@ defmodule Micelio.HTTP.ApiSpec do
 
   defp inference_profile_parameters do
     [Operation.parameter(:profile, :path, :string, "Inference profile name"), repository_parameter()]
+  end
+
+  defp secret_backend_parameters do
+    [Operation.parameter(:backend, :path, :string, "Secret backend name"), repository_parameter()]
   end
 
   defp author_schema do
@@ -501,14 +536,14 @@ defmodule Micelio.HTTP.ApiSpec do
   defp inference_profile_schema do
     %Schema{
       type: :object,
-      required: [:account, :name, :version, :endpoint, :model, :credential_source],
+      required: [:account, :name, :version, :endpoint, :model, :credential_binding],
       properties: %{
         account: %Schema{type: :string},
         name: %Schema{type: :string},
         version: %Schema{type: :string},
         endpoint: %Schema{type: :string, format: :uri},
         model: %Schema{type: :string},
-        credential_source: credential_source_schema(),
+        credential_binding: credential_binding_schema(),
         created_at_ms: %Schema{type: :integer},
         created_by: author_schema()
       }
@@ -530,21 +565,61 @@ defmodule Micelio.HTTP.ApiSpec do
   defp inference_profile_input_schema do
     %Schema{
       type: :object,
-      required: [:endpoint, :model, :credential_source],
+      required: [:endpoint, :model, :credential_binding],
       properties: %{
         endpoint: %Schema{type: :string, format: :uri},
         model: %Schema{type: :string},
-        credential_source: credential_source_schema(),
+        credential_binding: credential_binding_schema(),
         previous_version: %Schema{type: :string}
       }
     }
   end
 
-  defp credential_source_schema do
+  defp credential_binding_schema do
     %Schema{
       type: :object,
       description:
-        "Non-secret delivery metadata. Supported shapes are an injected secret reference or a secret-manager driver with workload identity or an injected bootstrap secret."
+        "Non-secret reference to an account secret backend, its machine identity, and a logical secret locator. It never includes a provider endpoint, workload-token audience, token, or secret value."
+    }
+  end
+
+  defp secret_backend_schema do
+    %Schema{
+      type: :object,
+      required: [:account, :name, :version, :driver, :project],
+      properties: %{
+        account: %Schema{type: :string},
+        name: %Schema{type: :string},
+        version: %Schema{type: :string},
+        driver: %Schema{type: :string, enum: ["managed_infisical"]},
+        project: %Schema{type: :string},
+        created_at_ms: %Schema{type: :integer},
+        created_by: author_schema()
+      }
+    }
+  end
+
+  defp secret_backend_list_schema do
+    %Schema{
+      type: :object,
+      required: [:account, :backends, :count],
+      properties: %{
+        account: %Schema{type: :string},
+        backends: %Schema{type: :array, items: secret_backend_schema()},
+        count: %Schema{type: :integer, minimum: 0}
+      }
+    }
+  end
+
+  defp secret_backend_input_schema do
+    %Schema{
+      type: :object,
+      required: [:driver, :project],
+      properties: %{
+        driver: %Schema{type: :string, enum: ["managed_infisical"]},
+        project: %Schema{type: :string},
+        previous_version: %Schema{type: :string}
+      }
     }
   end
 

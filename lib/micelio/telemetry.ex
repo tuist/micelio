@@ -37,7 +37,7 @@ defmodule Micelio.Telemetry do
     * `[:micelio, :git, :aborted]` — client vanished or stream failed
     * `[:micelio, :mcp, :request]` — `duration_us`, meta `method`, `outcome`
     * `[:micelio, :factory, :operation]` — `duration_us`, meta `operation`,
-      `outcome`; durable graph-run and inference-profile coordination
+      `outcome`; durable graph-run and account-configuration coordination
     * `[:micelio, :auth, :authorized]` / `[:micelio, :auth, :denied]`
     * `[:micelio, :cluster, :nodeup]` / `[:micelio, :cluster, :nodedown]`
     * `[:micelio, :repository, :created]`

@@ -21,6 +21,7 @@ defmodule Micelio.HTTP.Router do
   alias Micelio.HTTP.InferenceProfilesRouter
   alias Micelio.HTTP.IssuesRouter
   alias Micelio.HTTP.MCPRouter
+  alias Micelio.HTTP.SecretBackendsRouter
   alias Micelio.HTTP.WorkRunsRouter
   alias Micelio.HTTP.WellKnownRouter
 
@@ -77,6 +78,13 @@ defmodule Micelio.HTTP.Router do
     |> assign(:api, true)
     |> AuthPlug.call([])
     |> then(&InferenceProfilesRouter.call(%{&1 | path_info: rest}, InferenceProfilesRouter.init([])))
+  end
+
+  defp route(%{path_info: ["api", "secret-backends" | rest]} = conn) do
+    conn
+    |> assign(:api, true)
+    |> AuthPlug.call([])
+    |> then(&SecretBackendsRouter.call(%{&1 | path_info: rest}, SecretBackendsRouter.init([])))
   end
 
   defp route(%{path_info: []} = conn) do

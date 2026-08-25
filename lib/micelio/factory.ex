@@ -521,8 +521,8 @@ defmodule Micelio.Factory do
   defp normalize_execution(_), do: {:error, "has an execution that is not an object"}
 
   # A run stores only the selected profile and its immutable version. The
-  # credential-delivery details stay out of repository-readable graph state
-  # and are resolved for the executor only after a successful claim.
+  # credential binding stays out of repository-readable graph state and work
+  # claims; the trusted provisioner resolves it from account configuration.
   defp pin_inference_profiles(account, nodes) do
     Enum.reduce_while(nodes, {:ok, []}, fn node, {:ok, pinned} ->
       case get_in(node, ["execution", "inference_profile"]) do
@@ -962,7 +962,12 @@ defmodule Micelio.Factory do
            Map.put(
              work,
              :inference_profile,
-             Map.take(profile, ["name", "version", "endpoint", "model", "credential_source"])
+             # A work claim authorizes execution, not secret delivery. The
+             # provisioner reads the pinned profile from account configuration
+             # and mounts its non-secret contract into the trusted egress
+             # proxy; repository commands never receive secret locators or
+             # backend metadata from Micelio.
+             Map.take(profile, ["name", "version", "endpoint", "model"])
            )}
         end
     end

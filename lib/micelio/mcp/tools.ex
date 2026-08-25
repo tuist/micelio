@@ -32,6 +32,7 @@ defmodule Micelio.MCP.Tools do
   alias Micelio.Control
   alias Micelio.Factory
   alias Micelio.Factory.InferenceProfile
+  alias Micelio.Factory.SecretBackend
   alias Micelio.Git
   alias Micelio.Issues
   alias Micelio.Replica
@@ -229,19 +230,55 @@ defmodule Micelio.MCP.Tools do
         }
       },
       %{
+        name: "configure_secret_backend",
+        title: "Configure secret backend",
+        description:
+          "Store a versioned account binding to the deployment-managed Infisical secret backend. It never accepts an endpoint, workload token, or secret value.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "backend", "project"],
+          properties: %{
+            repository: repository_property(),
+            backend: %{type: "string"},
+            project: %{type: "string", description: "The Infisical project identifier for this account."},
+            previous_version: %{type: "string", description: "Required when replacing an existing backend."}
+          }
+        }
+      },
+      %{
+        name: "list_secret_backends",
+        title: "List secret backends",
+        description: "List the current non-secret backend bindings for a repository account.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository"],
+          properties: %{repository: repository_property()}
+        }
+      },
+      %{
+        name: "get_secret_backend",
+        title: "Get secret backend",
+        description: "Read one current non-secret backend binding for a repository account.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "backend"],
+          properties: %{repository: repository_property(), backend: %{type: "string"}}
+        }
+      },
+      %{
         name: "configure_inference_profile",
         title: "Configure inference profile",
         description:
-          "Store a versioned account inference profile. The credential source describes delivery only; it never accepts a credential value.",
+          "Store a versioned account inference profile. Its credential binding refers to a managed backend and never accepts a credential value or provider endpoint.",
         inputSchema: %{
           type: "object",
-          required: ["repository", "profile", "endpoint", "model", "credential_source"],
+          required: ["repository", "profile", "endpoint", "model", "credential_binding"],
           properties: %{
             repository: repository_property(),
             profile: %{type: "string"},
             endpoint: %{type: "string", description: "HTTPS inference endpoint without credentials."},
             model: %{type: "string"},
-            credential_source: %{type: "object"},
+            credential_binding: %{type: "object"},
             previous_version: %{type: "string", description: "Required when replacing an existing profile."}
           }
         }
@@ -698,7 +735,7 @@ defmodule Micelio.MCP.Tools do
   def call("configure_inference_profile", args, principal, _opts) do
     repo_id = args["repository"]
 
-    with :ok <- authorize(principal, repo_id, :admin) do
+    with :ok <- authorize_account(principal, repo_id) do
       InferenceProfile.put(
         Micelio.Policy.account_of(repo_id),
         args["profile"],
@@ -711,15 +748,44 @@ defmodule Micelio.MCP.Tools do
   def call("list_inference_profiles", args, principal, _opts) do
     repo_id = args["repository"]
 
-    with :ok <- authorize(principal, repo_id, :admin),
+    with :ok <- authorize_account(principal, repo_id),
          do: InferenceProfile.list(Micelio.Policy.account_of(repo_id))
   end
 
   def call("get_inference_profile", args, principal, _opts) do
     repo_id = args["repository"]
 
-    with :ok <- authorize(principal, repo_id, :admin),
+    with :ok <- authorize_account(principal, repo_id),
          do: InferenceProfile.get(Micelio.Policy.account_of(repo_id), args["profile"])
+  end
+
+  def call("configure_secret_backend", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize_account(principal, repo_id) do
+      SecretBackend.put(
+        Micelio.Policy.account_of(repo_id),
+        args["backend"],
+        args
+        |> Map.drop(["repository", "backend"])
+        |> Map.put("driver", "managed_infisical"),
+        principal
+      )
+    end
+  end
+
+  def call("list_secret_backends", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize_account(principal, repo_id),
+         do: SecretBackend.list(Micelio.Policy.account_of(repo_id))
+  end
+
+  def call("get_secret_backend", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize_account(principal, repo_id),
+         do: SecretBackend.get(Micelio.Policy.account_of(repo_id), args["backend"])
   end
 
   def call("list_work_runs", args, principal, _opts) do
@@ -1155,13 +1221,24 @@ defmodule Micelio.MCP.Tools do
       not WAL.valid_id?(repo_id) ->
         {:error, "invalid repository id: #{inspect(repo_id)}"}
 
-      Auth.Principal.allows?(principal, repo_id, permission) ->
+      Auth.authorize(principal, repo_id, permission) == :ok ->
         :ok
 
       true ->
         # Same reasoning as the HTTP surface: do not confirm existence to
         # someone who may not read it.
         {:error, "repository #{repo_id} not found"}
+    end
+  end
+
+  defp authorize_account(principal, repo_id) do
+    with :ok <- authorize(principal, repo_id, :admin) do
+      account = Micelio.Policy.account_of(repo_id)
+
+      case Auth.authorize_account(principal, account, :admin) do
+        :ok -> :ok
+        {:error, :forbidden} -> {:error, "not permitted to administer account #{account}"}
+      end
     end
   end
 

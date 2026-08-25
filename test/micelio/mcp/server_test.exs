@@ -138,6 +138,8 @@ defmodule Micelio.MCP.ServerTest do
     assert "create_issue" in names
     assert "add_issue_comment" in names
     assert "create_work_run" in names
+    assert "configure_secret_backend" in names
+    assert "get_secret_backend" in names
     assert "configure_inference_profile" in names
     assert "get_inference_profile" in names
     assert "claim_work_node" in names
@@ -393,7 +395,7 @@ defmodule Micelio.MCP.ServerTest do
   end
 
   describe "work runs" do
-    test "configures an account inference profile without accepting a credential value", %{
+    test "configures an account backend and inference profile without accepting a credential value", %{
       opts: opts,
       repo: repo,
       namespace: namespace
@@ -407,6 +409,19 @@ defmodule Micelio.MCP.ServerTest do
 
       opts = Keyword.put(opts, :principal, administrator)
 
+      backend =
+        call_tool(
+          "configure_secret_backend",
+          %{
+            "repository" => repo,
+            "backend" => "production",
+            "project" => "acme-production"
+          },
+          opts
+        )
+
+      refute backend[:isError], inspect(backend)
+
       configured =
         call_tool(
           "configure_inference_profile",
@@ -415,7 +430,11 @@ defmodule Micelio.MCP.ServerTest do
             "profile" => "coding",
             "endpoint" => "https://inference.example.com/v1",
             "model" => "coding-model",
-            "credential_source" => %{"type" => "injected_secret", "reference" => "coding-api-key"}
+            "credential_binding" => %{
+              "backend" => "production",
+              "identity_id" => "coding-machine-identity",
+              "secret" => %{"reference" => "/production/coding", "field" => "api_key"}
+            }
           },
           opts
         )
@@ -426,10 +445,14 @@ defmodule Micelio.MCP.ServerTest do
       fetched = call_tool("get_inference_profile", %{"repository" => repo, "profile" => "coding"}, opts)
       refute fetched[:isError], inspect(fetched)
 
-      assert fetched.structuredContent["credential_source"] == %{
-               "type" => "injected_secret",
-               "reference" => "coding-api-key"
-             }
+      assert fetched.structuredContent["credential_binding"]["backend"] == "production"
+      refute Map.has_key?(fetched.structuredContent, "token")
+
+      fetched_backend =
+        call_tool("get_secret_backend", %{"repository" => repo, "backend" => "production"}, opts)
+
+      refute fetched_backend[:isError], inspect(fetched_backend)
+      assert fetched_backend.structuredContent["driver"] == "managed_infisical"
     end
 
     test "uses a mocked Condukt operation without needing a model session", %{opts: opts, repo: repo} do

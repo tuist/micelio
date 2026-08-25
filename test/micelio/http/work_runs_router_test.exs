@@ -127,13 +127,36 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
     assert error =~ "not permitted"
   end
 
-  test "delivers a configured profile only to an execution-scoped worker", %{
+  test "keeps a configured profile binding out of an execution-scoped work claim", %{
     repo: repo,
     writer: writer,
     executor: executor,
     admin: admin,
     base_commit: base_commit
   } do
+    backend =
+      request(
+        :put,
+        "/api/secret-backends/production?repository=#{repo}",
+        %{driver: "managed_infisical", project: "acme-production"},
+        admin
+      )
+
+    assert backend.status == 200
+
+    assert %{"driver" => "managed_infisical", "project" => "acme-production"} =
+             JSON.decode!(backend.resp_body)
+
+    listed_backends = request(:get, "/api/secret-backends?repository=#{repo}", nil, admin)
+    assert listed_backends.status == 200
+
+    assert %{"count" => 1, "backends" => [%{"name" => "production"}]} =
+             JSON.decode!(listed_backends.resp_body)
+
+    fetched_backend = request(:get, "/api/secret-backends/production?repository=#{repo}", nil, admin)
+    assert fetched_backend.status == 200
+    assert %{"driver" => "managed_infisical"} = JSON.decode!(fetched_backend.resp_body)
+
     configured =
       request(
         :put,
@@ -141,9 +164,10 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
         %{
           endpoint: "https://inference.example.com/v1",
           model: "coding-model",
-          credential_source: %{
-            type: "injected_secret",
-            reference: "account-coding-api-key"
+          credential_binding: %{
+            backend: "production",
+            identity_id: "coding-machine-identity",
+            secret: %{reference: "/production/coding", field: "api_key"}
           }
         },
         admin
@@ -192,10 +216,8 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
                "inference_profile" => %{
                  "name" => "coding",
                  "version" => ^version,
-                 "credential_source" => %{
-                   "type" => "injected_secret",
-                   "reference" => "account-coding-api-key"
-                 }
+                 "endpoint" => "https://inference.example.com/v1",
+                 "model" => "coding-model"
                }
              }
            } = JSON.decode!(claimed.resp_body)

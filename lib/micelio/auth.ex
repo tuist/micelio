@@ -87,6 +87,18 @@ defmodule Micelio.Auth do
     end
   end
 
+  @doc """
+  Whether `principal` may administer account-scoped configuration.
+
+  Account configuration must not be anchored on one repository. The synthetic
+  nested path requires a grant that covers the whole account, such as
+  `acme/**`, rather than an administrator grant on `acme/one-repository`.
+  """
+  @spec authorize_account(Principal.t(), String.t(), Principal.permission()) :: :ok | {:error, :forbidden}
+  def authorize_account(%Principal{} = principal, account, permission) when is_binary(account) do
+    authorize(principal, "#{account}/.micelio/account-configuration", permission)
+  end
+
   defp granted_by_policy?(principal, repo_id, permission) do
     account = Micelio.Policy.account_of(repo_id)
 

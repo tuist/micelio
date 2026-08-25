@@ -57,6 +57,22 @@ defmodule Micelio.PolicyTest do
       assert [%{permissions: [:execute]}] = Policy.grants_for(account, "worker")
     end
 
+    test "requires an account-wide administrator grant for account configuration", %{account: account} do
+      repository_administrator = %Principal{
+        subject: "repository-administrator",
+        grants: [Principal.grant("#{account}/app", [:admin])]
+      }
+
+      assert {:error, :forbidden} = Auth.authorize_account(repository_administrator, account, :admin)
+
+      account_administrator = %Principal{
+        subject: "account-administrator",
+        grants: [Principal.grant("#{account}/**", [:admin])]
+      }
+
+      assert :ok = Auth.authorize_account(account_administrator, account, :admin)
+    end
+
     test "a subject pattern binds a whole class of identities", %{account: account} do
       # This is what makes it usable for machine identities: every service
       # account in a namespace, without enumerating them.

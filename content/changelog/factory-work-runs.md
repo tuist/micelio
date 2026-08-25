@@ -20,14 +20,17 @@ that safe without a leader, even when multiple workers race through different
 nodes.
 
 A node can name a Condukt operation and its input. An account administrator
-can now also configure a named, versioned inference profile. It persists an
-endpoint, model, and non-secret credential-delivery contract. Runs pin the
-profile version they select, and Micelio returns it only to a worker with
-execution permission after it claims work.
+can now configure a versioned binding to the deployment-managed Infisical
+service and a named, versioned inference profile. The profile persists its
+endpoint, model, and a non-secret secret reference. Runs pin both versions.
+The worker claim returns the profile name, version, endpoint, and model, but
+not the secret backend, machine identity, or secret reference.
 
-Micelio never stores a model credential or conversation. The worker reports
-artifacts and an outcome when it is done, and Micelio retains the evidence even
-when a lease expires or a run is cancelled.
+Micelio never stores a model credential or conversation. A future trusted
+Condukt egress proxy will exchange the sandbox workload identity directly with
+Infisical and inject the inference credential into outbound requests. The
+worker reports artifacts and an outcome when it is done, and Micelio retains
+the evidence even when a lease expires or a run is cancelled.
 
 The application programming interface and Model Context Protocol both expose
 the same graph, event history, claims, and attempt evidence.

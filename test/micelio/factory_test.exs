@@ -4,6 +4,7 @@ defmodule Micelio.FactoryTest do
   alias Micelio.Auth.Principal
   alias Micelio.Factory
   alias Micelio.Factory.InferenceProfile
+  alias Micelio.Factory.SecretBackend
   alias Micelio.WAL
   alias Micelio.WAL.Entry
 
@@ -97,13 +98,22 @@ defmodule Micelio.FactoryTest do
     assert {:ok, %{events: [], next_cursor: 6}} = Factory.events(repo, created.id, 6)
   end
 
-  test "pins an account inference profile and exposes its non-secret delivery contract only to a claimed worker",
+  test "pins an account inference profile without exposing its secret binding to a claimed worker",
        %{
          repo: repo,
          namespace: namespace,
          principal: principal
        } do
+    assert {:ok, backend} =
+             SecretBackend.put(
+               namespace,
+               "production",
+               %{"driver" => "managed_infisical", "project" => "acme-production"},
+               principal
+             )
+
     assert {:ok, profile} = InferenceProfile.put(namespace, "coding", profile_attrs(), principal)
+    assert profile["credential_binding"]["backend_version"] == backend["version"]
 
     graph = %{
       "nodes" => [
@@ -131,14 +141,7 @@ defmodule Micelio.FactoryTest do
              "name" => "coding",
              "version" => profile["version"],
              "endpoint" => "https://inference.example.com/v1",
-             "model" => "coding-model",
-             "credential_source" => %{
-               "type" => "secret_manager",
-               "driver" => "infisical",
-               "endpoint" => "https://secrets.example.com",
-               "secret" => %{"reference" => "/production/coding", "field" => "api_key"},
-               "authentication" => %{"type" => "workload_identity", "audience" => "micelio-workers"}
-             }
+             "model" => "coding-model"
            }
 
     updated_attrs = Map.put(profile_attrs(), "model", "new-coding-model")
@@ -156,20 +159,48 @@ defmodule Micelio.FactoryTest do
     assert original["model"] == "coding-model"
   end
 
+  test "versions an account secret backend without changing a profile-pinned version", %{
+    namespace: namespace,
+    principal: principal
+  } do
+    assert {:ok, first} =
+             SecretBackend.put(
+               namespace,
+               "production",
+               %{"driver" => "managed_infisical", "project" => "acme-production"},
+               principal
+             )
+
+    assert {:ok, second} =
+             SecretBackend.put(
+               namespace,
+               "production",
+               %{
+                 "driver" => "managed_infisical",
+                 "project" => "acme-rotated",
+                 "previous_version" => first["version"]
+               },
+               principal
+             )
+
+    assert second["version"] != first["version"]
+    assert {:ok, original} = SecretBackend.get_version(namespace, "production", first["version"])
+    assert original["project"] == "acme-production"
+    assert {:ok, %{backends: [current], count: 1}} = SecretBackend.list(namespace)
+    assert current["version"] == second["version"]
+  end
+
   test "rejects inference profile credentials rather than persisting them", %{
     namespace: namespace,
     principal: principal
   } do
-    attrs =
-      profile_attrs()
-      |> Map.put("credential_source", %{
-        "type" => "injected_secret",
-        "reference" => "model-api-key",
-        "token" => "secret"
-      })
-
-    assert {:error, "credential_source has an unsupported shape"} =
-             InferenceProfile.put(namespace, "unsafe", attrs, principal)
+    assert {:error, "inference profile contains an unsupported field"} =
+             InferenceProfile.put(
+               namespace,
+               "unsafe",
+               Map.put(profile_attrs(), "credential_source", %{"token" => "secret"}),
+               principal
+             )
 
     assert {:error, "inference profile contains an unsupported field"} =
              InferenceProfile.put(
@@ -431,12 +462,10 @@ defmodule Micelio.FactoryTest do
     %{
       "endpoint" => "https://inference.example.com/v1",
       "model" => "coding-model",
-      "credential_source" => %{
-        "type" => "secret_manager",
-        "driver" => "infisical",
-        "endpoint" => "https://secrets.example.com",
-        "secret" => %{"reference" => "/production/coding", "field" => "api_key"},
-        "authentication" => %{"type" => "workload_identity", "audience" => "micelio-workers"}
+      "credential_binding" => %{
+        "backend" => "production",
+        "identity_id" => "coding-machine-identity",
+        "secret" => %{"reference" => "/production/coding", "field" => "api_key"}
       }
     }
   end

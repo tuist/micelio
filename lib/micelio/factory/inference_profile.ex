@@ -3,16 +3,19 @@ defmodule Micelio.Factory.InferenceProfile do
   Versioned, account-scoped inference configuration for sandbox workers.
 
   The objects in this module deliberately describe *how a worker obtains* an
-  inference credential. They never contain the credential itself. That keeps
-  the object-store log suitable as the authoritative record while leaving
-  plaintext secrets in the sandbox's secret-delivery boundary.
+  inference credential. They never contain the credential itself, the secret
+  manager endpoint, or the workload-token audience. Those deployment-owned
+  values stay in the trusted runtime proxy. That keeps the object-store log
+  suitable as the authoritative record while leaving plaintext secrets outside
+  both Micelio and the agent sandbox.
   """
 
   alias Micelio.Auth.Principal
+  alias Micelio.Factory.SecretBackend
   alias Micelio.ObjectStore
   alias Micelio.Telemetry
 
-  @content_type "application/vnd.micelio.factory.inference-profile.v1+json"
+  @content_type "application/vnd.micelio.factory.inference-profile.v2+json"
 
   @type result :: {:ok, map()} | {:error, String.t()}
 
@@ -65,20 +68,20 @@ defmodule Micelio.Factory.InferenceProfile do
          :ok <- attributes(attrs),
          {:ok, endpoint} <- endpoint(attrs["endpoint"] || attrs[:endpoint]),
          {:ok, model} <- model(attrs["model"] || attrs[:model]),
-         {:ok, credential_source} <-
-           credential_source(attrs["credential_source"] || attrs[:credential_source]),
+         {:ok, credential_binding} <-
+           credential_binding(account, attrs["credential_binding"] || attrs[:credential_binding]),
          {:ok, current, etag} <- current(account, name),
          :ok <- expected_version(attrs["previous_version"] || attrs[:previous_version], current) do
       version = identifier()
 
       profile = %{
-        "schema_version" => 1,
+        "schema_version" => 2,
         "account" => account,
         "name" => name,
         "version" => version,
         "endpoint" => endpoint,
         "model" => model,
-        "credential_source" => credential_source,
+        "credential_binding" => credential_binding,
         "created_at_ms" => System.system_time(:millisecond),
         "created_by" => actor(principal)
       }
@@ -96,7 +99,7 @@ defmodule Micelio.Factory.InferenceProfile do
   defp do_put(_account, _name, _attrs, _principal), do: {:error, "inference profile must be an object"}
 
   defp attributes(attrs) do
-    allowed = MapSet.new(~w(endpoint model credential_source previous_version))
+    allowed = MapSet.new(~w(endpoint model credential_binding previous_version))
 
     if Enum.all?(Map.keys(attrs), &(to_string(&1) in allowed)) do
       :ok
@@ -191,49 +194,28 @@ defmodule Micelio.Factory.InferenceProfile do
     )
   end
 
-  defp credential_source(%{"type" => "injected_secret", "reference" => reference} = source)
-       when map_size(source) == 2 do
-    with :ok <- reference(reference), do: {:ok, %{"type" => "injected_secret", "reference" => reference}}
-  end
-
-  defp credential_source(
-         %{
-           "type" => "secret_manager",
-           "driver" => driver,
-           "endpoint" => endpoint,
-           "secret" => secret,
-           "authentication" => authentication
-         } = source
+  defp credential_binding(
+         account,
+         %{"backend" => backend_name, "identity_id" => identity_id, "secret" => secret} = binding
        )
-       when map_size(source) == 5 do
-    with :ok <- driver(driver),
-         {:ok, endpoint} <- endpoint(endpoint),
-         {:ok, secret} <- secret(secret),
-         {:ok, authentication} <- authentication(authentication) do
+       when map_size(binding) == 3 do
+    with :ok <- name(backend_name),
+         {:ok, backend} <- SecretBackend.get(account, backend_name),
+         :ok <- reference(identity_id),
+         {:ok, secret} <- secret(secret) do
       {:ok,
        %{
-         "type" => "secret_manager",
-         "driver" => driver,
-         "endpoint" => endpoint,
-         "secret" => secret,
-         "authentication" => authentication
+         "backend" => backend_name,
+         "backend_version" => backend["version"],
+         "identity_id" => identity_id,
+         "secret" => secret
        }}
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp credential_source(_), do: {:error, "credential_source has an unsupported shape"}
-
-  defp authentication(%{"type" => "workload_identity", "audience" => audience} = authentication)
-       when map_size(authentication) == 2 do
-    with :ok <- reference(audience), do: {:ok, %{"type" => "workload_identity", "audience" => audience}}
-  end
-
-  defp authentication(%{"type" => "injected_secret", "reference" => reference} = authentication)
-       when map_size(authentication) == 2 do
-    with :ok <- reference(reference), do: {:ok, %{"type" => "injected_secret", "reference" => reference}}
-  end
-
-  defp authentication(_), do: {:error, "credential_source authentication has an unsupported shape"}
+  defp credential_binding(_account, _binding), do: {:error, "credential_binding has an unsupported shape"}
 
   defp secret(%{"reference" => reference} = secret) do
     field = secret["field"]
@@ -243,11 +225,11 @@ defmodule Micelio.Factory.InferenceProfile do
          :ok <- optional_reference(field) do
       {:ok, %{"reference" => reference} |> maybe_put("field", field)}
     else
-      false -> {:error, "credential_source secret has an unsupported shape"}
+      false -> {:error, "credential_binding secret has an unsupported shape"}
     end
   end
 
-  defp secret(_), do: {:error, "credential_source secret has an unsupported shape"}
+  defp secret(_), do: {:error, "credential_binding secret has an unsupported shape"}
 
   defp endpoint(value) when is_binary(value) and byte_size(value) <= 2_048 do
     case URI.parse(value) do
@@ -284,14 +266,6 @@ defmodule Micelio.Factory.InferenceProfile do
   end
 
   defp version(_), do: {:error, "inference profile version is invalid"}
-
-  defp driver(value) when is_binary(value) do
-    if Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, value),
-      do: :ok,
-      else: {:error, "credential_source driver is invalid"}
-  end
-
-  defp driver(_), do: {:error, "credential_source driver is invalid"}
 
   defp reference(value) when is_binary(value) and byte_size(value) in 1..512 do
     if String.match?(value, ~r/[\x00-\x1F]/),
