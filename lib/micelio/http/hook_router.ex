@@ -72,8 +72,8 @@ defmodule Micelio.HTTP.HookRouter do
 
   defp read_full_body(conn, acc \\ []) do
     case read_body(conn, length: 1_000_000) do
-      {:ok, chunk, conn} -> {:ok, IO.iodata_to_binary([acc | chunk]), conn}
-      {:more, chunk, conn} -> read_full_body(conn, [acc | chunk])
+      {:ok, chunk, conn} -> {:ok, acc |> Enum.reverse() |> then(&[&1, chunk]) |> IO.iodata_to_binary(), conn}
+      {:more, chunk, conn} -> read_full_body(conn, [chunk | acc])
       {:error, reason} -> {:error, reason}
     end
   end

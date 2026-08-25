@@ -94,10 +94,6 @@ defmodule Micelio.HTTP.GitBackend do
     finish(result, port, started, opts)
   end
 
-  defp refuse(conn, {:exited_early, _status}) do
-    send_resp(conn, 500, "micelio: the git process exited before the request was complete\n")
-  end
-
   defp refuse(conn, _reason) do
     send_resp(conn, 400, "micelio: the request could not be read\n")
   end
