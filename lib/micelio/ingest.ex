@@ -57,26 +57,46 @@ defmodule Micelio.Ingest do
     actor = Keyword.get(opts, :actor, %V1.Actor{})
     started = System.monotonic_time(:millisecond)
 
-    with {:ok, packs} <- collect_packs(repo_id, quarantine),
-         {:ok, result} <- append(repo_id, commands, packs, actor) do
-      Replica.record_local_push(repo_id, result.epoch, result.seq)
-      Cluster.announce(repo_id, result.epoch, result.seq)
+    Micelio.Telemetry.span(
+      "micelio.push.commit",
+      %{
+        "micelio.repository.id" => repo_id,
+        "micelio.push.ref_count" => length(commands)
+      },
+      fn ->
+        result =
+          with {:ok, packs} <- collect_packs(repo_id, quarantine),
+               {:ok, result} <- append(repo_id, commands, packs, actor) do
+            Replica.record_local_push(repo_id, result.epoch, result.seq)
+            Cluster.announce(repo_id, result.epoch, result.seq)
 
-      duration = System.monotonic_time(:millisecond) - started
+            duration = System.monotonic_time(:millisecond) - started
 
-      :telemetry.execute(
-        [:micelio, :push, :committed],
-        %{duration_ms: duration, refs: length(commands), packs: length(packs)},
-        %{repo_id: repo_id, seq: result.seq}
-      )
+            :telemetry.execute(
+              [:micelio, :push, :committed],
+              %{duration_ms: duration, refs: length(commands), packs: length(packs)},
+              %{repo_id: repo_id, seq: result.seq}
+            )
 
-      Logger.info("push committed to #{repo_id} at seq #{result.seq} (#{duration}ms)")
-      {:ok, result}
-    else
-      {:error, reason} ->
-        :telemetry.execute([:micelio, :push, :rejected], %{}, %{repo_id: repo_id, reason: classify(reason)})
-        {:error, message(reason)}
-    end
+            Logger.info("push committed", repo_id: repo_id, seq: result.seq, duration_ms: duration)
+            {:ok, result}
+          else
+            {:error, reason} ->
+              :telemetry.execute([:micelio, :push, :rejected], %{}, %{
+                repo_id: repo_id,
+                reason: classify(reason)
+              })
+
+              {:error, message(reason)}
+          end
+
+        Micelio.Telemetry.put_span_attributes(%{
+          "micelio.push.outcome" => if(match?({:ok, _}, result), do: "committed", else: "rejected")
+        })
+
+        result
+      end
+    )
   end
 
   # Objects arrive in a quarantine directory that Git discards if we fail.
@@ -261,8 +281,10 @@ defmodule Micelio.Ingest do
           Replica.record_local_push(repo_id, result.epoch, result.seq)
 
         {:error, reason} ->
-          Logger.error(
-            "#{repo_id} committed seq #{result.seq} but could not apply it locally: #{inspect(reason)}"
+          Logger.error("could not apply committed push locally",
+            repo_id: repo_id,
+            seq: result.seq,
+            reason: reason
           )
       end
 

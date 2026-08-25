@@ -34,7 +34,7 @@ defmodule Micelio.Control do
   def create_repository(repo_id, opts \\ []) do
     case WAL.create(repo_id, opts) do
       {:ok, index} ->
-        Logger.info("created repository #{repo_id}")
+        Logger.info("created repository", repo_id: repo_id)
         :telemetry.execute([:micelio, :repository, :created], %{}, %{repo_id: repo_id})
         {:ok, summarize(index)}
 
@@ -57,7 +57,7 @@ defmodule Micelio.Control do
         :erpc.cast(node, Replica, :evict, [repo_id])
       end)
 
-      Logger.info("deleted repository #{repo_id}")
+      Logger.info("deleted repository", repo_id: repo_id)
       :ok
     end
   end

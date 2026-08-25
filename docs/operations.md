@@ -184,10 +184,23 @@ adds Git Credential Manager, so credentials for other Git hosts are unaffected.
 
 ### Observability
 
-| Variable | Notes |
-|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Setting it enables tracing |
-| `MICELIO_PUBLIC_URL` | Overrides the URL advertised to clients |
+| Variable | Default | Notes |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Setting an [OpenTelemetry](https://opentelemetry.io/docs/) Protocol endpoint enables tracing |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http_protobuf` | Export protocol used for traces |
+| `MICELIO_PUBLIC_URL` | unset | Overrides the URL advertised to clients |
+
+Tracing begins at every listener and adds spans for public requests, pushes,
+replica refreshes and synchronization, and each object-store operation. Request
+trace headers from public clients are linked for correlation rather than used as
+the parent of Micelio work. This prevents an untrusted caller from choosing the
+service's trace tree.
+
+When tracing is enabled, logs emitted inside Micelio's explicit spans include
+`otel_trace_id` and `otel_span_id`. Operational logs use fields such as
+`repo_id`, `seq`, `epoch`, `reason`, `service`, and `duration_ms`; configure
+the log collector to retain those fields. Credentials, object keys, and request
+bodies are never logged.
 
 ## Ports
 
@@ -222,6 +235,10 @@ replicas are doing real catch-up work on the read path, and latency will follow.
 | `micelio_push_rejected_count{reason}` | `non_fast_forward` is users; `storage` and `contention` are yours |
 | `micelio_git_aborted_count` | Clients disconnecting mid-clone |
 | `micelio_replica_evict_count` | Cache churn. High values with high sync duration means the working set does not fit |
+| `micelio_object_store_request_duration_seconds{operation,outcome}` | Is the source of truth slow or failing? `operation` and `outcome` have bounded values; no repository identifier is a label |
+| `micelio_object_store_request_count{operation,outcome}` | Is object-store traffic or a particular failure outcome rising? |
+| `micelio_http_request_duration_seconds{listener,method,status}` | Is any public, hook, or administration listener slow or returning errors? `method` and `status` use bounded classes; `status` is a response class such as `5xx` |
+| `micelio_http_exception_count{listener}` | Did a request terminate unexpectedly before it could return a response? |
 
 ### What to autoscale on
 

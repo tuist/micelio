@@ -18,6 +18,34 @@ defmodule Micelio.ObjectStoreTest do
     assert {:error, :not_found} = ObjectStore.get("nope")
   end
 
+  test "emits bounded observability data for every object-store request" do
+    handler = {__MODULE__, :object_store_request, self()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:micelio, :object_store, :request],
+        fn _event, measurements, meta, pid ->
+          if self() == pid, do: send(pid, {:object_store_request, measurements, meta})
+        end,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, _etag} = ObjectStore.put("observed", "value")
+
+    assert_receive {:object_store_request, %{duration_us: duration}, meta}
+    assert is_integer(duration) and duration >= 0
+    assert meta == %{operation: :put, outcome: :ok}
+
+    assert {:error, :not_found} = ObjectStore.get("missing")
+
+    assert_receive {:object_store_request, %{duration_us: duration}, meta}
+    assert is_integer(duration) and duration >= 0
+    assert meta == %{operation: :get, outcome: :not_found}
+  end
+
   describe "conditional reads" do
     test "an unchanged object reports not_modified" do
       {:ok, etag} = ObjectStore.put("k", "v1")

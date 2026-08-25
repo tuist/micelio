@@ -98,6 +98,18 @@ behaviour that is not implemented, mark it explicitly as not implemented — the
 has already been one commit whose entire purpose was removing three claims about
 multi-tenancy that were not true.
 
+## Observability
+
+Every service-facing change needs an observability pass. Make its successful
+work, failures and latency explainable through [OpenTelemetry](https://opentelemetry.io/docs/),
+[Prometheus](https://prometheus.io/docs/introduction/overview/) metrics and
+structured logs. Add trace spans around significant boundaries, emit metrics
+for volume, latency and failures, and log exceptional events with stable fields
+that let an operator connect them to the trace. Never put repository names,
+account names, object keys, tokens or other unbounded values into metric labels.
+Update `docs/operations.md` and add tests whenever the observable contract
+changes.
+
 ## Commits
 
 Conventional commits, and they are load-bearing: merging to `main` publishes a

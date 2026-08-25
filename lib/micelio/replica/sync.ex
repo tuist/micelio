@@ -29,6 +29,7 @@ defmodule Micelio.Replica.Sync do
   require Logger
 
   alias Micelio.Git
+  alias Micelio.Telemetry
   alias Micelio.WAL
   alias Micelio.WAL.Index
 
@@ -44,6 +45,22 @@ defmodule Micelio.Replica.Sync do
   @spec run(String.t(), Path.t(), Index.t(), non_neg_integer(), non_neg_integer()) ::
           {:ok, outcome()} | {:error, term()}
   def run(repo_id, path, index, epoch, seq) do
+    Telemetry.span(
+      "micelio.replica.sync",
+      %{
+        "micelio.repository.id" => repo_id,
+        "micelio.replica.from.epoch" => epoch,
+        "micelio.replica.from.seq" => seq,
+        "micelio.replica.to.epoch" => index.epoch,
+        "micelio.replica.to.seq" => index.seq
+      },
+      fn ->
+        do_run(repo_id, path, index, epoch, seq)
+      end
+    )
+  end
+
+  defp do_run(repo_id, path, index, epoch, seq) do
     started = System.monotonic_time(:millisecond)
     required = Index.required_packs(index)
 
@@ -56,8 +73,12 @@ defmodule Micelio.Replica.Sync do
 
       if index.seq != seq or index.epoch != epoch do
         Logger.info(
-          "synced #{repo_id}: #{epoch}/#{seq} -> #{index.epoch}/#{index.seq} " <>
-            "(#{downloaded} pack(s), #{duration}ms)"
+          "synchronized replica",
+          repo_id: repo_id,
+          epoch: index.epoch,
+          seq: index.seq,
+          packs: downloaded,
+          duration_ms: duration
         )
       end
 
@@ -128,10 +149,14 @@ defmodule Micelio.Replica.Sync do
         )
 
       File.mkdir_p!(scratch)
+      context = Telemetry.context()
 
       try do
         missing
-        |> Task.async_stream(&fetch_and_install(repo_id, path, &1, scratch),
+        |> Task.async_stream(
+          fn pack ->
+            Telemetry.with_context(context, fn -> fetch_and_install(repo_id, path, pack, scratch) end)
+          end,
           max_concurrency: 4,
           timeout: :timer.minutes(30),
           ordered: false

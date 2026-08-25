@@ -8,6 +8,15 @@ template = "page.html"
 Small notes about the improvements we are shipping. New entries appear here as
 they land.
 
+## 2026-08-25
+
+### 👀 [A clearer view of a running node](@/changelog/observability.md)
+
+Micelio now traces public requests, Git pushes, replica work, and object-store
+operations. Operators can use trace-linked logs and bounded Prometheus metrics
+to understand latency, failures, and throughput without exposing repository
+identifiers in metric labels.
+
 ## 2026-08-24
 
 ### 🧰 [Maintenance work stays off the serving path](@/changelog/maintenance-roles.md)
