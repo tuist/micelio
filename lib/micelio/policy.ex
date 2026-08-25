@@ -142,7 +142,7 @@ defmodule Micelio.Policy do
   defp parse_permissions(permissions) do
     permissions
     |> Enum.filter(&(&1 in ~w(read write execute admin)))
-    |> Enum.map(&String.to_existing_atom/1)
+    |> Enum.map(&Principal.permission/1)
   end
 
   @doc """

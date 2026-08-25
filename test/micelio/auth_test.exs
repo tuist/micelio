@@ -144,5 +144,9 @@ defmodule Micelio.AuthTest do
       assert parsed["t1"].scopes == [:read, :write, :execute]
       assert parsed["t2"].scopes == [:read]
     end
+
+    test "parse_tokens/1 accepts the execution scope without dynamically creating an atom" do
+      assert %{"worker" => %{scopes: [:execute]}} = Static.parse_tokens("worker=acme:execute")
+    end
   end
 end

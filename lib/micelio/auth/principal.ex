@@ -29,6 +29,27 @@ defmodule Micelio.Auth.Principal do
   @spec grant(String.t(), [permission()]) :: grant()
   def grant(pattern, permissions), do: %{pattern: pattern, permissions: permissions}
 
+  @doc "Convert one externally supplied permission name without creating an atom."
+  @spec permission(String.t() | atom()) :: permission() | nil
+  def permission("read"), do: :read
+  def permission("write"), do: :write
+  def permission("execute"), do: :execute
+  def permission("admin"), do: :admin
+  def permission(:read), do: :read
+  def permission(:write), do: :write
+  def permission(:execute), do: :execute
+  def permission(:admin), do: :admin
+  def permission(_), do: nil
+
+  @doc false
+  @spec permission!(String.t() | atom()) :: permission()
+  def permission!(value) do
+    case permission(value) do
+      nil -> raise ArgumentError, "unknown Micelio permission #{inspect(value)}"
+      permission -> permission
+    end
+  end
+
   @doc """
   Whether the principal may perform `permission` on `repo_id`.
 
