@@ -27,9 +27,17 @@ defmodule Micelio.HTTP.Router do
 
   @impl true
   def call(conn, _opts) do
-    conn
-    |> put_resp_header("x-micelio-node", Micelio.Config.node_id())
-    |> route()
+    Micelio.Telemetry.span(
+      "micelio.http.public",
+      %{
+        "http.request.method" => conn.method
+      },
+      fn ->
+        conn
+        |> put_resp_header("x-micelio-node", Micelio.Config.node_id())
+        |> route()
+      end
+    )
   end
 
   defp route(%{path_info: [".well-known" | rest]} = conn) do

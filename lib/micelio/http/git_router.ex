@@ -78,7 +78,7 @@ defmodule Micelio.HTTP.GitRouter do
 
         with {:ok, conn} <- AuthPlug.authorize(conn, repo_id, permission),
              {:ok, view} <- fresh(conn, repo_id) do
-          GitBackend.advertise(conn, view.path, service, env: protocol_env(conn))
+          GitBackend.advertise(conn, view.path, service, repo_id: repo_id, env: protocol_env(conn))
         else
           {:halt, conn} -> conn
           {:error, conn} -> conn
@@ -154,7 +154,7 @@ defmodule Micelio.HTTP.GitRouter do
         {:error, send_resp(conn, 404, "micelio: repository not found\n")}
 
       {:error, reason} ->
-        Logger.error("could not serve #{repo_id}: #{inspect(reason)}")
+        Logger.error("could not serve repository", repo_id: repo_id, reason: reason)
         {:error, send_resp(conn, 503, "micelio: repository temporarily unavailable\n")}
     end
   end

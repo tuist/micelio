@@ -29,6 +29,8 @@ defmodule Micelio.PromEx.Plugin do
   @impl true
   def event_metrics(_opts) do
     [
+      http_metrics(),
+      object_store_metrics(),
       wal_metrics(),
       replica_metrics(),
       push_metrics(),
@@ -36,6 +38,60 @@ defmodule Micelio.PromEx.Plugin do
       mcp_metrics(),
       auth_metrics()
     ]
+  end
+
+  defp http_metrics do
+    Event.build(:micelio_http_event_metrics, [
+      distribution(
+        [:micelio, :http, :request, :duration_seconds],
+        event_name: [:micelio, :http, :request],
+        measurement: :duration_us,
+        description: "End-to-end HTTP request duration, by listener, method and response status class.",
+        unit: {:microsecond, :second},
+        tags: [:listener, :method, :status],
+        reporter_options: [buckets: [0.001, 0.005, 0.025, 0.1, 0.5, 1, 5, 30, 300, 1800]]
+      ),
+      counter(
+        [:micelio, :http, :request, :count],
+        event_name: [:micelio, :http, :request],
+        description: "Completed HTTP requests.",
+        tags: [:listener, :method, :status]
+      ),
+      sum(
+        [:micelio, :http, :request, :bytes],
+        event_name: [:micelio, :http, :request],
+        measurement: :response_bytes,
+        unit: :byte,
+        description: "Bytes sent in HTTP responses.",
+        tags: [:listener]
+      ),
+      counter(
+        [:micelio, :http, :exception, :count],
+        event_name: [:micelio, :http, :exception],
+        description: "Unhandled HTTP request exceptions.",
+        tags: [:listener]
+      )
+    ])
+  end
+
+  defp object_store_metrics do
+    Event.build(:micelio_object_store_event_metrics, [
+      distribution(
+        [:micelio, :object_store, :request, :duration_seconds],
+        event_name: [:micelio, :object_store, :request],
+        measurement: :duration_us,
+        description: "Object-store request duration. The object store is the source of truth.",
+        unit: {:microsecond, :second},
+        tags: [:operation, :outcome],
+        reporter_options: [buckets: [0.001, 0.005, 0.025, 0.1, 0.5, 1, 5, 30, 300]]
+      ),
+      counter(
+        [:micelio, :object_store, :request, :count],
+        event_name: [:micelio, :object_store, :request],
+        description: "Object-store requests, by operation and bounded outcome.",
+        tags: [:operation, :outcome]
+      )
+    ])
   end
 
   defp wal_metrics do

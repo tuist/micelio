@@ -142,7 +142,6 @@ defmodule Micelio.HTTP.GitBackend do
       %{service: Keyword.get(opts, :service), repo_id: Keyword.get(opts, :repo_id), reason: reason}
     )
 
-    Logger.debug("git stream aborted: #{inspect(reason)}")
     conn
   end
 
@@ -202,7 +201,7 @@ defmodule Micelio.HTTP.GitBackend do
         # The response is already in flight, so the status cannot become an
         # HTTP error. Git will have written its own protocol-level error to
         # the client before exiting.
-        Logger.warning("git exited #{status} mid-stream after #{bytes} bytes")
+        Logger.warning("Git process exited mid-stream", status: status, bytes: bytes)
         {:ok, conn, bytes}
     after
       @idle_timeout -> {:error, conn, :timeout}
@@ -220,6 +219,7 @@ defmodule Micelio.HTTP.GitBackend do
   @spec advertise(Plug.Conn.t(), Path.t(), String.t(), keyword()) :: Plug.Conn.t()
   def advertise(conn, repo_path, service, opts \\ []) do
     env = Keyword.get(opts, :env, [])
+    repo_id = Keyword.get(opts, :repo_id)
     command = String.replace_prefix(service, "git-", "")
 
     case Git.run(repo_path, [command, "--stateless-rpc", "--advertise-refs", repo_path], env: env) do
@@ -239,7 +239,7 @@ defmodule Micelio.HTTP.GitBackend do
         |> send_resp(200, body)
 
       {:error, reason} ->
-        Logger.warning("advertisement failed for #{repo_path}: #{inspect(reason)}")
+        Logger.warning("Git advertisement failed", repo_id: repo_id, service: service, reason: reason)
 
         conn
         |> put_resp_content_type("text/plain")

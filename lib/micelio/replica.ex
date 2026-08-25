@@ -78,7 +78,19 @@ defmodule Micelio.Replica do
   """
   @spec ensure_fresh(String.t(), keyword()) :: {:ok, view()} | {:error, term()}
   def ensure_fresh(repo_id, opts \\ []) do
-    call(repo_id, {:ensure_fresh, opts}, Keyword.get(opts, :timeout, :timer.minutes(10)))
+    Micelio.Telemetry.span(
+      "micelio.replica.ensure_fresh",
+      %{
+        "micelio.repository.id" => repo_id
+      },
+      fn ->
+        call(
+          repo_id,
+          {:ensure_fresh, opts, Micelio.Telemetry.context()},
+          Keyword.get(opts, :timeout, :timer.minutes(10))
+        )
+      end
+    )
   end
 
   # A replica can go away between being looked up and being called: the reaper
@@ -280,24 +292,23 @@ defmodule Micelio.Replica do
   end
 
   @impl true
-  def handle_call({:ensure_fresh, opts}, _from, state) do
+  def handle_call({:ensure_fresh, opts, context}, _from, state) do
     budget = Keyword.get(opts, :staleness_budget_ms, Config.staleness_budget_ms())
     now = System.monotonic_time(:millisecond)
     state = %{state | accessed_at: now}
 
-    if state.index && budget > 0 && state.verified_at && now - state.verified_at < budget do
-      :telemetry.execute([:micelio, :replica, :serve], %{}, %{repo_id: state.repo_id, path: :budget})
-      {:reply, {:ok, view(state)}, state}
-    else
-      case refresh(state) do
-        {:ok, state} ->
-          {:reply, {:ok, view(state)}, state}
+    {reply, state} =
+      Micelio.Telemetry.with_context(context, fn ->
+        Micelio.Telemetry.span(
+          "micelio.replica.refresh",
+          %{
+            "micelio.repository.id" => state.repo_id
+          },
+          fn -> ensure_state_fresh(state, budget, now) end
+        )
+      end)
 
-        {:error, reason} = error ->
-          Logger.warning("replica #{state.repo_id} could not refresh: #{inspect(reason)}")
-          {:reply, error, state}
-      end
-    end
+    {:reply, reply, state}
   end
 
   def handle_call(:info, _from, state) do
@@ -324,7 +335,7 @@ defmodule Micelio.Replica do
   def handle_call(:evict, _from, state) do
     File.rm_rf(state.path)
     :telemetry.execute([:micelio, :replica, :evict], %{}, %{repo_id: state.repo_id})
-    Logger.info("evicted #{state.repo_id} from local disk")
+    Logger.info("evicted replica from local disk", repo_id: state.repo_id)
     {:stop, :normal, :ok, state}
   end
 
@@ -356,6 +367,22 @@ defmodule Micelio.Replica do
   # ----------------------------------------------------------------------
   # Internals
   # ----------------------------------------------------------------------
+
+  defp ensure_state_fresh(state, budget, now) do
+    if state.index && budget > 0 && state.verified_at && now - state.verified_at < budget do
+      :telemetry.execute([:micelio, :replica, :serve], %{}, %{repo_id: state.repo_id, path: :budget})
+      {{:ok, view(state)}, state}
+    else
+      case refresh(state) do
+        {:ok, state} ->
+          {{:ok, view(state)}, state}
+
+        {:error, reason} = error ->
+          Logger.warning("replica could not refresh", repo_id: state.repo_id, reason: reason)
+          {error, state}
+      end
+    end
+  end
 
   defp refresh(state) do
     case WAL.read(state.repo_id, state.etag) do

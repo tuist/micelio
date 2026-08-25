@@ -116,6 +116,34 @@ defmodule Micelio.ObjectStore do
 
   defp dispatch(fun, args) do
     {mod, config} = backend()
-    apply(mod, fun, args ++ [config])
+    started = System.monotonic_time(:microsecond)
+
+    result =
+      Micelio.Telemetry.span(
+        "micelio.object_store.#{fun}",
+        %{
+          "micelio.object_store.operation" => Atom.to_string(fun),
+          "micelio.object_store.backend" => inspect(mod)
+        },
+        fn ->
+          apply(mod, fun, args ++ [config])
+          |> Micelio.Telemetry.put_span_outcome()
+        end
+      )
+
+    :telemetry.execute(
+      [:micelio, :object_store, :request],
+      %{duration_us: System.monotonic_time(:microsecond) - started},
+      %{operation: fun, outcome: operation_outcome(result)}
+    )
+
+    result
   end
+
+  defp operation_outcome(:ok), do: :ok
+  defp operation_outcome({:ok, _}), do: :ok
+  defp operation_outcome({:ok, _, _}), do: :ok
+  defp operation_outcome({:error, :not_found}), do: :not_found
+  defp operation_outcome({:error, :precondition_failed}), do: :precondition_failed
+  defp operation_outcome({:error, _}), do: :error
 end
