@@ -161,6 +161,16 @@ defmodule Micelio.ReplicaTest do
       assert {:ok, refs} = Git.refs(view.path)
       assert refs["refs/heads/side"] == first
     end
+
+    test "records recent traffic even when it reuses a verified index", %{repo: repo} do
+      {:ok, _} = Replica.ensure_fresh(repo, staleness_budget_ms: 60_000)
+      Process.sleep(20)
+      {:ok, _} = Replica.ensure_fresh(repo, staleness_budget_ms: 60_000)
+
+      assert {:ok, info} = Replica.info(repo)
+      assert info.last_verified_ms_ago >= 10
+      assert info.last_accessed_ms_ago < info.last_verified_ms_ago
+    end
   end
 
   describe "integrity" do

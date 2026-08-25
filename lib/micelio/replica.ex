@@ -52,7 +52,7 @@ defmodule Micelio.Replica do
           seq: non_neg_integer(),
           etag: String.t() | nil,
           index: Index.t() | nil,
-          verified_at: integer(),
+          verified_at: integer() | nil,
           accessed_at: integer()
         }
 
@@ -324,6 +324,7 @@ defmodule Micelio.Replica do
       behind: if(state.index, do: max(state.index.seq - state.seq, 0), else: nil),
       materialized: File.dir?(Path.join(state.path, "objects")),
       last_verified_ms_ago: age(state.verified_at),
+      last_accessed_ms_ago: age(state.accessed_at),
       objects: stats.objects,
       size_kb: stats.size_kb,
       packs: stats.packs

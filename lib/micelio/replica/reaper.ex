@@ -66,7 +66,11 @@ defmodule Micelio.Replica.Reaper do
   defp evictable?(repo_id, idle_after) do
     case Replica.info(repo_id) do
       {:ok, info} ->
-        idle? = is_integer(info.last_verified_ms_ago) and info.last_verified_ms_ago > idle_after
+        # A revalidation is evidence of freshness, not of traffic. With a
+        # non-zero staleness budget an actively served repository can go a long
+        # time without revalidating, so eviction must follow the timestamp that
+        # every read updates.
+        idle? = is_integer(info.last_accessed_ms_ago) and info.last_accessed_ms_ago > idle_after
         # A repository that moved away under rehashing is evicted regardless of
         # how recently it was touched: it now belongs somewhere else.
         # A maintenance-only node intentionally materializes repositories
