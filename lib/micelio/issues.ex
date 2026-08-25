@@ -126,16 +126,13 @@ defmodule Micelio.Issues do
   @spec list(String.t()) :: result()
   def list(repo_id) do
     in_repository(repo_id, fn view ->
-      with {:ok, head} <- issue_head(view.path) do
-        issues =
-          case head do
-            nil -> []
-            _ -> list_issues(view.path, head)
-          end
+      case issue_head(view.path) do
+        {:ok, head} ->
+          issues = if head, do: list_issues(view.path, head), else: []
+          {:ok, %{issues: issues, count: length(issues)}}
 
-        {:ok, %{issues: issues, count: length(issues)}}
-      else
-        {:error, reason} -> {:error, "could not list issues: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "could not list issues: #{inspect(reason)}"}
       end
     end)
   end
@@ -360,13 +357,15 @@ defmodule Micelio.Issues do
   defp retry_mutation(_repo_id, _build, 0), do: {:error, "issue changed concurrently; please retry"}
 
   defp retry_mutation(repo_id, build, attempts) do
-    with {:ok, view} <- Replica.ensure_fresh(repo_id) do
-      case build.(view) do
-        {:retry, _reason} -> retry_mutation(repo_id, build, attempts - 1)
-        result -> result
-      end
-    else
-      {:error, reason} -> {:error, "repository unavailable: #{inspect(reason)}"}
+    case Replica.ensure_fresh(repo_id) do
+      {:ok, view} ->
+        case build.(view) do
+          {:retry, _reason} -> retry_mutation(repo_id, build, attempts - 1)
+          result -> result
+        end
+
+      {:error, reason} ->
+        {:error, "repository unavailable: #{inspect(reason)}"}
     end
   end
 
@@ -446,23 +445,25 @@ defmodule Micelio.Issues do
   defp read_events(repo_path, head, number) do
     dir = "issues/#{number}/events"
 
-    with {:ok, entries} <- Git.list_tree(repo_path, head, dir, recursive: true) do
-      entries
-      |> Enum.filter(&(&1.type == "blob"))
-      |> Enum.sort_by(& &1.path)
-      |> Enum.reduce_while({:ok, []}, fn entry, {:ok, events} ->
-        case read_json(repo_path, head, entry.path) do
-          {:ok, event} -> {:cont, {:ok, [present_event(event) | events]}}
-          {:error, reason} -> {:halt, {:error, reason}}
+    case Git.list_tree(repo_path, head, dir, recursive: true) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&(&1.type == "blob"))
+        |> Enum.sort_by(& &1.path)
+        |> Enum.reduce_while({:ok, []}, fn entry, {:ok, events} ->
+          case read_json(repo_path, head, entry.path) do
+            {:ok, event} -> {:cont, {:ok, [present_event(event) | events]}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+        |> case do
+          {:ok, []} -> {:error, :not_found}
+          {:ok, events} -> {:ok, Enum.reverse(events) |> Enum.sort_by(&{&1.occurred_at, &1.id})}
+          error -> error
         end
-      end)
-      |> case do
-        {:ok, []} -> {:error, :not_found}
-        {:ok, events} -> {:ok, Enum.reverse(events) |> Enum.sort_by(&{&1.occurred_at, &1.id})}
-        error -> error
-      end
-    else
-      {:error, _reason} -> {:error, :not_found}
+
+      {:error, _reason} ->
+        {:error, :not_found}
     end
   end
 

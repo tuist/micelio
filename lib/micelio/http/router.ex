@@ -15,15 +15,15 @@ defmodule Micelio.HTTP.Router do
 
   import Plug.Conn
 
-  alias Micelio.HTTP.AuthPlug
   alias Micelio.HTTP.ApiSpec
+  alias Micelio.HTTP.AuthPlug
   alias Micelio.HTTP.GitRouter
   alias Micelio.HTTP.InferenceProfilesRouter
   alias Micelio.HTTP.IssuesRouter
   alias Micelio.HTTP.MCPRouter
   alias Micelio.HTTP.SecretBackendsRouter
-  alias Micelio.HTTP.WorkRunsRouter
   alias Micelio.HTTP.WellKnownRouter
+  alias Micelio.HTTP.WorkRunsRouter
 
   @impl true
   def init(opts), do: opts

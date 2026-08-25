@@ -2,8 +2,8 @@ defmodule Micelio.MaintenanceTest do
   use Micelio.Case, async: true
 
   alias Micelio.Config
-  alias Micelio.MCP.Tools
   alias Micelio.Maintenance
+  alias Micelio.MCP.Tools
 
   test "normalizes node capability roles" do
     Config.put_overrides(Map.put(Config.overrides(), :roles, "serve, events,serve"))
