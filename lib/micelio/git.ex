@@ -286,7 +286,7 @@ defmodule Micelio.Git do
   """
   @spec repack(path()) :: {:ok, [Path.t()]} | {:error, term()}
   def repack(repo_path) do
-    case run(repo_path, ["repack", "-a", "-d", "-f", "--write-bitmap-index", "--quiet"],
+    case run_supervised(repo_path, ["repack", "-a", "-d", "-f", "--write-bitmap-index", "--quiet"],
            timeout: :timer.hours(2)
          ) do
       {:ok, _} ->
@@ -295,7 +295,8 @@ defmodule Micelio.Git do
       # Bitmaps cannot be written for every repository shape. The pack is what
       # the log records, so fall back rather than fail compaction over an index.
       {:error, _} ->
-        with {:ok, _} <- run(repo_path, ["repack", "-a", "-d", "--quiet"], timeout: :timer.hours(2)) do
+        with {:ok, _} <-
+               run_supervised(repo_path, ["repack", "-a", "-d", "--quiet"], timeout: :timer.hours(2)) do
           {:ok, packs(repo_path)}
         end
     end
@@ -621,6 +622,7 @@ defmodule Micelio.Git do
   @spec run(path() | nil, [String.t()], keyword()) ::
           {:ok, String.t()} | {:error, {:git, integer() | :timeout, String.t()}}
   def run(path, args, opts \\ []) do
+    subcommand = subcommand(args)
     args = if path, do: ["--git-dir", path | args], else: args
     started = System.monotonic_time(:microsecond)
 
@@ -629,7 +631,7 @@ defmodule Micelio.Git do
     duration = System.monotonic_time(:microsecond) - started
 
     :telemetry.execute([:micelio, :git, :command], %{duration_us: duration, bytes: byte_size(output)}, %{
-      subcommand: subcommand(args),
+      subcommand: subcommand,
       status: status
     })
 
@@ -658,6 +660,7 @@ defmodule Micelio.Git do
   """
   @spec run_supervised(path(), [String.t()], keyword()) :: {:ok, String.t()} | {:error, term()}
   def run_supervised(path, args, opts \\ []) do
+    subcommand = subcommand(args)
     full = ["--git-dir", path | args]
     started = System.monotonic_time(:microsecond)
 
@@ -670,7 +673,7 @@ defmodule Micelio.Git do
       [:micelio, :git, :command],
       %{duration_us: System.monotonic_time(:microsecond) - started, bytes: 0},
       %{
-        subcommand: subcommand(full),
+        subcommand: subcommand,
         status: status
       }
     )
@@ -736,6 +739,7 @@ defmodule Micelio.Git do
   defp run_with_stdin(args, stdin, opts) do
     tmp = Path.join(System.tmp_dir!(), "micelio-stdin-" <> random_suffix())
     File.write!(tmp, stdin)
+    File.chmod!(tmp, 0o600)
 
     try do
       System.cmd(

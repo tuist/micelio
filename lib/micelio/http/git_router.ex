@@ -168,8 +168,15 @@ defmodule Micelio.HTTP.GitRouter do
     expected = "application/x-#{service}-request"
 
     case get_req_header(conn, "content-type") do
-      [type | _] -> if String.starts_with?(type, expected), do: :ok, else: :ok
-      [] -> :ok
+      [type | _] ->
+        if String.starts_with?(type, expected) do
+          :ok
+        else
+          {:error, send_resp(conn, 415, "micelio: expected #{expected}, got #{type}\n")}
+        end
+
+      [] ->
+        :ok
     end
   end
 

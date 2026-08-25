@@ -82,6 +82,7 @@ defmodule Micelio.Git.Hooks do
       --header "X-Micelio-Quarantine: ${GIT_QUARANTINE_PATH:-}" \\
       --header "X-Micelio-Git-Dir: $(pwd)" \\
       --header "X-Micelio-Push: ${MICELIO_PUSH_ID:-}" \\
+      --header "X-Micelio-Actor: ${MICELIO_ACTOR:-}" \\
       --data-binary @- \\
       --write-out '\\n%{http_code}' \\
       "${MICELIO_HOOK_URL:-#{callback_url()}}" 2>&1) || {
