@@ -40,13 +40,13 @@ defmodule Micelio.HTTP.WorkRunsRouter do
   end
 
   post "/:run/claim" do
-    with_run(conn, run, :write, fn repo_id, principal ->
+    with_run(conn, run, :execute, fn repo_id, principal ->
       Factory.claim(repo_id, run, conn.body_params["executor"], principal)
     end)
   end
 
   post "/:run/nodes/:node/complete" do
-    with_run(conn, run, :write, fn repo_id, principal ->
+    with_run(conn, run, :execute, fn repo_id, principal ->
       Factory.complete(
         repo_id,
         run,

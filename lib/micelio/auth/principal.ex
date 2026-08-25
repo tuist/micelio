@@ -10,7 +10,7 @@ defmodule Micelio.Auth.Principal do
   creating repositories at machine speed.
   """
 
-  @type permission :: :read | :write | :admin
+  @type permission :: :read | :write | :execute | :admin
 
   @type grant :: %{pattern: String.t(), permissions: [permission()]}
 

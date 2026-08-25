@@ -122,10 +122,15 @@ The subject arrives as `system:serviceaccount:<namespace>:<name>`. With
 `<namespace>/**` — so a pod in `team-ios` can use `team-ios`'s repositories and
 nothing else, with no per-team configuration at all.
 
+That default deliberately does not grant `execute`. A sandbox that must claim
+work and receive an account inference profile needs an explicit `execute` grant
+through the account policy or the token's grants claim. This prevents ordinary
+source-code writers from learning credential-delivery metadata.
+
 For finer control, put explicit grants in a claim:
 
 ```json
-{ "micelio_grants": ["acme/**:read", "acme/sandbox-*:read,write"] }
+{ "micelio_grants": ["acme/**:read", "acme/sandbox-*:read,write,execute"] }
 ```
 
 ### Audience binding is not optional

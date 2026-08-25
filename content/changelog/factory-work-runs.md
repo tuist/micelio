@@ -19,10 +19,15 @@ Workers claim one ready node at a time. Conditional object-storage writes make
 that safe without a leader, even when multiple workers race through different
 nodes.
 
-A node can name a Condukt operation and its input. Micelio returns that
-contract to the worker without storing a model credential or conversation. The
-worker reports artifacts and an outcome when it is done, and Micelio retains
-the evidence even when a lease expires or a run is cancelled.
+A node can name a Condukt operation and its input. An account administrator
+can now also configure a named, versioned inference profile. It persists an
+endpoint, model, and non-secret credential-delivery contract. Runs pin the
+profile version they select, and Micelio returns it only to a worker with
+execution permission after it claims work.
+
+Micelio never stores a model credential or conversation. The worker reports
+artifacts and an outcome when it is done, and Micelio retains the evidence even
+when a lease expires or a run is cancelled.
 
 The application programming interface and Model Context Protocol both expose
 the same graph, event history, claims, and attempt evidence.
@@ -37,6 +42,6 @@ any node.
 ## Current scope
 
 Micelio coordinates work but does not provision a sandbox, start a model
-session, or select a model provider. That boundary keeps worker credentials and
-sessions inside the worker environment, while the durable coordination contract
-stays portable.
+session, resolve a secret-manager credential, or select a model provider. That
+boundary keeps worker credentials and sessions inside the worker environment,
+while the durable coordination contract stays portable.

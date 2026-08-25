@@ -150,11 +150,13 @@ authorization details.
 | `claim_work_node`, `complete_work_attempt` | Pull one ready node and conditionally accept its evidence |
 | `approve_work_node`, `cancel_work_run`, `expire_work_node` | Control an approval, terminal state, or stale lease |
 | `get_work_attempt` | Claim and result evidence for one attempt |
+| `configure_inference_profile`, `list_inference_profiles`, `get_inference_profile` | Manage non-secret account inference profiles |
 
 An agent node can name a [Condukt](https://github.com/tuist/condukt) operation
-and typed input. Micelio returns that contract to the worker but never stores a
-model credential or conversation. See [factory.md](factory.md) for the graph,
-storage, and lease semantics.
+and typed input. It can also select a versioned account inference profile.
+Micelio returns non-secret credential-delivery metadata only to a caller with
+repository execution permission, never a model credential or conversation. See
+[factory.md](factory.md) for profile, graph, storage, and lease semantics.
 
 ## Errors
 

@@ -279,7 +279,8 @@ defmodule Micelio.PromEx.Plugin do
         [:micelio, :factory, :operation, :duration],
         event_name: [:micelio, :factory, :operation],
         measurement: :duration_us,
-        description: "Duration of durable graph-run operations, by bounded operation and outcome.",
+        description:
+          "Duration of durable graph-run and inference-profile operations, by bounded operation and outcome.",
         unit: {:microsecond, :second},
         tags: [:operation, :outcome],
         reporter_options: [buckets: [0.001, 0.005, 0.025, 0.1, 0.5, 1, 5, 30]]
@@ -287,7 +288,7 @@ defmodule Micelio.PromEx.Plugin do
       counter(
         [:micelio, :factory, :operation, :count],
         event_name: [:micelio, :factory, :operation],
-        description: "Durable graph-run operations, by bounded operation and outcome.",
+        description: "Durable graph-run and inference-profile operations, by bounded operation and outcome.",
         tags: [:operation, :outcome]
       )
     ])

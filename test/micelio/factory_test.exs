@@ -3,6 +3,7 @@ defmodule Micelio.FactoryTest do
 
   alias Micelio.Auth.Principal
   alias Micelio.Factory
+  alias Micelio.Factory.InferenceProfile
   alias Micelio.WAL
   alias Micelio.WAL.Entry
 
@@ -94,6 +95,89 @@ defmodule Micelio.FactoryTest do
            ]
 
     assert {:ok, %{events: [], next_cursor: 6}} = Factory.events(repo, created.id, 6)
+  end
+
+  test "pins an account inference profile and exposes its non-secret delivery contract only to a claimed worker",
+       %{
+         repo: repo,
+         namespace: namespace,
+         principal: principal
+       } do
+    assert {:ok, profile} = InferenceProfile.put(namespace, "coding", profile_attrs(), principal)
+
+    graph = %{
+      "nodes" => [
+        %{
+          "id" => "work",
+          "title" => "Implement",
+          "execution" => %{
+            "type" => "condukt_operation",
+            "operation" => "implement_issue",
+            "inference_profile" => "coding"
+          }
+        }
+      ]
+    }
+
+    assert {:ok, run} = Factory.create(repo, graph, %{base_commit: base_commit()}, principal)
+    [node] = run.nodes
+    assert node["execution"]["inference_profile"] == "coding"
+    assert node["execution"]["inference_profile_version"] == profile["version"]
+    refute Map.has_key?(node["execution"], "credential_source")
+
+    assert {:ok, claimed} = Factory.claim(repo, run.id, "profile-worker", principal)
+
+    assert claimed.work.inference_profile == %{
+             "name" => "coding",
+             "version" => profile["version"],
+             "endpoint" => "https://inference.example.com/v1",
+             "model" => "coding-model",
+             "credential_source" => %{
+               "type" => "secret_manager",
+               "driver" => "infisical",
+               "endpoint" => "https://secrets.example.com",
+               "secret" => %{"reference" => "/production/coding", "field" => "api_key"},
+               "authentication" => %{"type" => "workload_identity", "audience" => "micelio-workers"}
+             }
+           }
+
+    updated_attrs = Map.put(profile_attrs(), "model", "new-coding-model")
+
+    assert {:ok, updated} =
+             InferenceProfile.put(
+               namespace,
+               "coding",
+               Map.put(updated_attrs, "previous_version", profile["version"]),
+               principal
+             )
+
+    assert updated["version"] != profile["version"]
+    assert {:ok, original} = InferenceProfile.get_version(namespace, "coding", profile["version"])
+    assert original["model"] == "coding-model"
+  end
+
+  test "rejects inference profile credentials rather than persisting them", %{
+    namespace: namespace,
+    principal: principal
+  } do
+    attrs =
+      profile_attrs()
+      |> Map.put("credential_source", %{
+        "type" => "injected_secret",
+        "reference" => "model-api-key",
+        "token" => "secret"
+      })
+
+    assert {:error, "credential_source has an unsupported shape"} =
+             InferenceProfile.put(namespace, "unsafe", attrs, principal)
+
+    assert {:error, "inference profile contains an unsupported field"} =
+             InferenceProfile.put(
+               namespace,
+               "unsafe-root",
+               Map.put(profile_attrs(), "token", "secret"),
+               principal
+             )
   end
 
   test "emits bounded telemetry for durable graph operations", %{repo: repo, principal: principal} do
@@ -342,4 +426,18 @@ defmodule Micelio.FactoryTest do
 
   defp one_node_graph, do: %{"nodes" => [%{"id" => "work", "title" => "Work"}]}
   defp base_commit, do: String.duplicate("a", 40)
+
+  defp profile_attrs do
+    %{
+      "endpoint" => "https://inference.example.com/v1",
+      "model" => "coding-model",
+      "credential_source" => %{
+        "type" => "secret_manager",
+        "driver" => "infisical",
+        "endpoint" => "https://secrets.example.com",
+        "secret" => %{"reference" => "/production/coding", "field" => "api_key"},
+        "authentication" => %{"type" => "workload_identity", "audience" => "micelio-workers"}
+      }
+    }
+  end
 end

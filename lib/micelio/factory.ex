@@ -15,7 +15,9 @@ defmodule Micelio.Factory do
   """
 
   alias Micelio.Auth.Principal
+  alias Micelio.Factory.InferenceProfile
   alias Micelio.ObjectStore
+  alias Micelio.Policy
   alias Micelio.Telemetry
   alias Micelio.WAL
 
@@ -34,6 +36,7 @@ defmodule Micelio.Factory do
   defp do_create(repo_id, graph, attrs, %Principal{} = principal) when is_map(graph) and is_map(attrs) do
     with :ok <- repository(repo_id),
          {:ok, nodes} <- normalize_graph(graph),
+         {:ok, nodes} <- pin_inference_profiles(Policy.account_of(repo_id), nodes),
          {:ok, base_commit} <- base_commit(attrs["base_commit"] || attrs[:base_commit]),
          :ok <- current_public_commit(repo_id, base_commit),
          {:ok, issue} <- issue(attrs["issue"] || attrs[:issue]),
@@ -299,10 +302,11 @@ defmodule Micelio.Factory do
 
   defp claim_update(repo_id, run_id, executor, principal, manifest, state) do
     with :ok <- active(state),
-         {:ok, node_id, node} <- ready_node(state) do
+         {:ok, node_id, node} <- ready_node(state),
+         definition = graph_node(manifest, node_id),
+         {:ok, work} <- work(repo_id, manifest, definition) do
       attempt_id = identifier()
       number = node["attempts"] + 1
-      definition = graph_node(manifest, node_id)
       claimed_at_ms = now()
 
       claim = %{
@@ -336,7 +340,7 @@ defmodule Micelio.Factory do
               attempt: claim,
               attempt_id: attempt_id,
               lease_duration_ms: manifest["lease_duration_ms"],
-              work: work(repo_id, manifest, definition)
+              work: work
             }}}
 
         {:error, reason} ->
@@ -488,6 +492,7 @@ defmodule Micelio.Factory do
     operation = raw["operation"] || raw[:operation]
     input = raw["input"] || raw[:input] || %{}
     output_schema = raw["output_schema"] || raw[:output_schema]
+    inference_profile = raw["inference_profile"] || raw[:inference_profile]
 
     cond do
       type != "condukt_operation" ->
@@ -502,14 +507,44 @@ defmodule Micelio.Factory do
       not is_nil(output_schema) and not is_map(output_schema) ->
         {:error, "has a Condukt operation output schema that is not an object"}
 
+      not is_nil(inference_profile) and not valid_identifier?(inference_profile) ->
+        {:error, "has an invalid inference profile name"}
+
       true ->
         {:ok,
          %{"type" => type, "operation" => operation, "input" => input}
-         |> maybe_put("output_schema", output_schema)}
+         |> maybe_put("output_schema", output_schema)
+         |> maybe_put("inference_profile", inference_profile)}
     end
   end
 
   defp normalize_execution(_), do: {:error, "has an execution that is not an object"}
+
+  # A run stores only the selected profile and its immutable version. The
+  # credential-delivery details stay out of repository-readable graph state
+  # and are resolved for the executor only after a successful claim.
+  defp pin_inference_profiles(account, nodes) do
+    Enum.reduce_while(nodes, {:ok, []}, fn node, {:ok, pinned} ->
+      case get_in(node, ["execution", "inference_profile"]) do
+        nil ->
+          {:cont, {:ok, pinned ++ [node]}}
+
+        name ->
+          case InferenceProfile.pin(account, name) do
+            {:ok, profile} ->
+              execution =
+                node["execution"]
+                |> Map.put("inference_profile", profile["name"])
+                |> Map.put("inference_profile_version", profile["version"])
+
+              {:cont, {:ok, pinned ++ [Map.put(node, "execution", execution)]}}
+
+            {:error, reason} ->
+              {:halt, {:error, "node #{node["id"]} #{reason}"}}
+          end
+      end
+    end)
+  end
 
   defp unique_node_ids(nodes) do
     if length(nodes) == length(Enum.uniq_by(nodes, & &1["id"])),
@@ -907,13 +942,30 @@ defmodule Micelio.Factory do
   end
 
   defp work(repo_id, manifest, definition) do
-    %{
+    work = %{
       repository: repo_id,
       run_id: manifest["id"],
       issue: manifest["issue"],
       base_commit: manifest["base_commit"],
       node: definition
     }
+
+    case get_in(definition, ["execution", "inference_profile"]) do
+      nil ->
+        {:ok, work}
+
+      name ->
+        version = get_in(definition, ["execution", "inference_profile_version"])
+
+        with {:ok, profile} <- InferenceProfile.get_version(Policy.account_of(repo_id), name, version) do
+          {:ok,
+           Map.put(
+             work,
+             :inference_profile,
+             Map.take(profile, ["name", "version", "endpoint", "model", "credential_source"])
+           )}
+        end
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

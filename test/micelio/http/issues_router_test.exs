@@ -122,6 +122,7 @@ defmodule Micelio.HTTP.IssuesRouterTest do
     assert Map.has_key?(paths, "/api/issues/{issue}/comments/{comment}")
     assert Map.has_key?(paths, "/api/work-runs")
     assert Map.has_key?(paths, "/api/work-runs/{run}/nodes/{node}/complete")
+    assert Map.has_key?(paths, "/api/inference-profiles/{profile}")
   end
 
   defp request(method, path, payload, token) do

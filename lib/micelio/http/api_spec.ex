@@ -29,6 +29,8 @@ defmodule Micelio.HTTP.ApiSpec do
           "WorkRun" => work_run_schema(),
           "WorkAttempt" => work_attempt_schema(),
           "WorkEvents" => work_events_schema(),
+          "InferenceProfile" => inference_profile_schema(),
+          "InferenceProfileList" => inference_profile_list_schema(),
           "Error" => error_schema()
         }
       }
@@ -148,6 +150,35 @@ defmodule Micelio.HTTP.ApiSpec do
           operation("cancelWorkRun", "Cancel a work run", work_run_parameters(), work_run_schema(),
             tags: ["Work runs"]
           )
+      },
+      "/api/inference-profiles" => %PathItem{
+        get:
+          operation(
+            "listInferenceProfiles",
+            "List account inference profiles",
+            [repository_parameter()],
+            inference_profile_list_schema(),
+            tags: ["Inference profiles"]
+          )
+      },
+      "/api/inference-profiles/{profile}" => %PathItem{
+        get:
+          operation(
+            "getInferenceProfile",
+            "Get account inference profile",
+            inference_profile_parameters(),
+            inference_profile_schema(),
+            tags: ["Inference profiles"]
+          ),
+        put:
+          operation(
+            "putInferenceProfile",
+            "Create or replace account inference profile",
+            inference_profile_parameters(),
+            inference_profile_schema(),
+            request_body: inference_profile_input_schema(),
+            tags: ["Inference profiles"]
+          )
       }
     }
   end
@@ -198,6 +229,10 @@ defmodule Micelio.HTTP.ApiSpec do
 
   defp work_node_parameters do
     work_run_parameters() ++ [Operation.parameter(:node, :path, :string, "Work-node identifier")]
+  end
+
+  defp inference_profile_parameters do
+    [Operation.parameter(:profile, :path, :string, "Inference profile name"), repository_parameter()]
   end
 
   defp author_schema do
@@ -378,7 +413,9 @@ defmodule Micelio.HTTP.ApiSpec do
         type: %Schema{type: :string, enum: ["condukt_operation"]},
         operation: %Schema{type: :string},
         input: %Schema{type: :object},
-        output_schema: %Schema{type: :object}
+        output_schema: %Schema{type: :object},
+        inference_profile: %Schema{type: :string},
+        inference_profile_version: %Schema{type: :string}
       }
     }
   end
@@ -458,6 +495,56 @@ defmodule Micelio.HTTP.ApiSpec do
         count: %Schema{type: :integer, minimum: 0},
         next_cursor: %Schema{type: :integer, minimum: 1}
       }
+    }
+  end
+
+  defp inference_profile_schema do
+    %Schema{
+      type: :object,
+      required: [:account, :name, :version, :endpoint, :model, :credential_source],
+      properties: %{
+        account: %Schema{type: :string},
+        name: %Schema{type: :string},
+        version: %Schema{type: :string},
+        endpoint: %Schema{type: :string, format: :uri},
+        model: %Schema{type: :string},
+        credential_source: credential_source_schema(),
+        created_at_ms: %Schema{type: :integer},
+        created_by: author_schema()
+      }
+    }
+  end
+
+  defp inference_profile_list_schema do
+    %Schema{
+      type: :object,
+      required: [:account, :profiles, :count],
+      properties: %{
+        account: %Schema{type: :string},
+        profiles: %Schema{type: :array, items: inference_profile_schema()},
+        count: %Schema{type: :integer, minimum: 0}
+      }
+    }
+  end
+
+  defp inference_profile_input_schema do
+    %Schema{
+      type: :object,
+      required: [:endpoint, :model, :credential_source],
+      properties: %{
+        endpoint: %Schema{type: :string, format: :uri},
+        model: %Schema{type: :string},
+        credential_source: credential_source_schema(),
+        previous_version: %Schema{type: :string}
+      }
+    }
+  end
+
+  defp credential_source_schema do
+    %Schema{
+      type: :object,
+      description:
+        "Non-secret delivery metadata. Supported shapes are an injected secret reference or a secret-manager driver with workload identity or an injected bootstrap secret."
     }
   end
 

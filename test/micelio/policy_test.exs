@@ -51,6 +51,12 @@ defmodule Micelio.PolicyTest do
       assert Policy.grants_for(account, "bob") == []
     end
 
+    test "grants execution separately from source writes", %{account: account} do
+      {:ok, _} = Policy.bind(account, "worker", ["#{account}/**"], ["execute"])
+
+      assert [%{permissions: [:execute]}] = Policy.grants_for(account, "worker")
+    end
+
     test "a subject pattern binds a whole class of identities", %{account: account} do
       # This is what makes it usable for machine identities: every service
       # account in a namespace, without enumerating them.

@@ -32,17 +32,19 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
          tokens: %{
            "writer" => %{account: namespace, scopes: [:read, :write]},
            "reader" => %{account: namespace, scopes: [:read]},
+           "executor" => %{account: namespace, scopes: [:read, :execute]},
            "admin" => %{account: namespace, scopes: [:admin]}
          }}
       )
     )
 
-    {:ok, writer: "writer", reader: "reader", admin: "admin", base_commit: base_commit}
+    {:ok, writer: "writer", reader: "reader", executor: "executor", admin: "admin", base_commit: base_commit}
   end
 
   test "lets a mocked Condukt worker claim, complete, and observe a work run", %{
     repo: repo,
     writer: writer,
+    executor: executor,
     base_commit: base_commit
   } do
     graph = %{
@@ -68,7 +70,7 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
     assert %{"id" => run_id, "status" => "active"} = JSON.decode!(created.resp_body)
 
     claimed =
-      request(:post, "/api/work-runs/#{run_id}/claim?repository=#{repo}", %{executor: "mock-pod"}, writer)
+      request(:post, "/api/work-runs/#{run_id}/claim?repository=#{repo}", %{executor: "mock-pod"}, executor)
 
     assert claimed.status == 200
 
@@ -91,7 +93,7 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
           outcome: "succeeded",
           artifacts: [%{name: "mock-log", uri: "s3://evidence/log"}]
         },
-        writer
+        executor
       )
 
     assert completed.status == 200
@@ -107,7 +109,7 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
     assert Enum.map(events, & &1["type"]) == ["work_run_created", "node_claimed", "attempt_succeeded"]
   end
 
-  test "requires write permission to create, claim, and report work", %{
+  test "requires write permission to create work", %{
     repo: repo,
     reader: reader,
     base_commit: base_commit
@@ -123,6 +125,80 @@ defmodule Micelio.HTTP.WorkRunsRouterTest do
     assert response.status == 403
     assert %{"error" => error} = JSON.decode!(response.resp_body)
     assert error =~ "not permitted"
+  end
+
+  test "delivers a configured profile only to an execution-scoped worker", %{
+    repo: repo,
+    writer: writer,
+    executor: executor,
+    admin: admin,
+    base_commit: base_commit
+  } do
+    configured =
+      request(
+        :put,
+        "/api/inference-profiles/coding?repository=#{repo}",
+        %{
+          endpoint: "https://inference.example.com/v1",
+          model: "coding-model",
+          credential_source: %{
+            type: "injected_secret",
+            reference: "account-coding-api-key"
+          }
+        },
+        admin
+      )
+
+    assert configured.status == 200
+    profile = JSON.decode!(configured.resp_body)
+    version = profile["version"]
+    refute Map.has_key?(profile, "token")
+
+    created =
+      request(
+        :post,
+        "/api/work-runs?repository=#{repo}",
+        %{
+          graph: %{
+            nodes: [
+              %{
+                id: "implement",
+                title: "Implement issue",
+                execution: %{
+                  type: "condukt_operation",
+                  operation: "implement_issue",
+                  inference_profile: "coding"
+                }
+              }
+            ]
+          },
+          base_commit: base_commit
+        },
+        writer
+      )
+
+    assert %{"id" => run_id} = JSON.decode!(created.resp_body)
+
+    assert request(:post, "/api/work-runs/#{run_id}/claim?repository=#{repo}", %{executor: "writer"}, writer).status ==
+             403
+
+    claimed =
+      request(:post, "/api/work-runs/#{run_id}/claim?repository=#{repo}", %{executor: "worker"}, executor)
+
+    assert claimed.status == 200
+
+    assert %{
+             "work" => %{
+               "inference_profile" => %{
+                 "name" => "coding",
+                 "version" => ^version,
+                 "credential_source" => %{
+                   "type" => "injected_secret",
+                   "reference" => "account-coding-api-key"
+                 }
+               }
+             }
+           } = JSON.decode!(claimed.resp_body)
   end
 
   test "rejects an invalid event cursor", %{repo: repo, writer: writer} do

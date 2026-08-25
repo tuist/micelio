@@ -31,6 +31,7 @@ defmodule Micelio.MCP.Tools do
   alias Micelio.Auth
   alias Micelio.Control
   alias Micelio.Factory
+  alias Micelio.Factory.InferenceProfile
   alias Micelio.Git
   alias Micelio.Issues
   alias Micelio.Replica
@@ -225,6 +226,44 @@ defmodule Micelio.MCP.Tools do
             issue: %{type: "integer", minimum: 1},
             lease_duration_ms: %{type: "integer", minimum: 1_000, maximum: 86_400_000}
           }
+        }
+      },
+      %{
+        name: "configure_inference_profile",
+        title: "Configure inference profile",
+        description:
+          "Store a versioned account inference profile. The credential source describes delivery only; it never accepts a credential value.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "profile", "endpoint", "model", "credential_source"],
+          properties: %{
+            repository: repository_property(),
+            profile: %{type: "string"},
+            endpoint: %{type: "string", description: "HTTPS inference endpoint without credentials."},
+            model: %{type: "string"},
+            credential_source: %{type: "object"},
+            previous_version: %{type: "string", description: "Required when replacing an existing profile."}
+          }
+        }
+      },
+      %{
+        name: "list_inference_profiles",
+        title: "List inference profiles",
+        description: "List the current non-secret inference profiles for a repository account.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository"],
+          properties: %{repository: repository_property()}
+        }
+      },
+      %{
+        name: "get_inference_profile",
+        title: "Get inference profile",
+        description: "Read one current non-secret inference profile for a repository account.",
+        inputSchema: %{
+          type: "object",
+          required: ["repository", "profile"],
+          properties: %{repository: repository_property(), profile: %{type: "string"}}
         }
       },
       %{
@@ -656,6 +695,33 @@ defmodule Micelio.MCP.Tools do
          do: Factory.create(repo_id, args["graph"], args, principal)
   end
 
+  def call("configure_inference_profile", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :admin) do
+      InferenceProfile.put(
+        Micelio.Policy.account_of(repo_id),
+        args["profile"],
+        Map.drop(args, ["repository", "profile"]),
+        principal
+      )
+    end
+  end
+
+  def call("list_inference_profiles", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :admin),
+         do: InferenceProfile.list(Micelio.Policy.account_of(repo_id))
+  end
+
+  def call("get_inference_profile", args, principal, _opts) do
+    repo_id = args["repository"]
+
+    with :ok <- authorize(principal, repo_id, :admin),
+         do: InferenceProfile.get(Micelio.Policy.account_of(repo_id), args["profile"])
+  end
+
   def call("list_work_runs", args, principal, _opts) do
     repo_id = args["repository"]
 
@@ -678,14 +744,14 @@ defmodule Micelio.MCP.Tools do
   def call("claim_work_node", args, principal, _opts) do
     repo_id = args["repository"]
 
-    with :ok <- authorize(principal, repo_id, :write),
+    with :ok <- authorize(principal, repo_id, :execute),
          do: Factory.claim(repo_id, args["run"], args["executor"], principal)
   end
 
   def call("complete_work_attempt", args, principal, _opts) do
     repo_id = args["repository"]
 
-    with :ok <- authorize(principal, repo_id, :write) do
+    with :ok <- authorize(principal, repo_id, :execute) do
       Factory.complete(
         repo_id,
         args["run"],

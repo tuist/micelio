@@ -17,7 +17,7 @@ defmodule Micelio.MCP.ServerTest do
     principal = %Principal{
       subject: "agent-1",
       account: namespace,
-      grants: [Principal.grant("#{namespace}/**", [:read, :write])],
+      grants: [Principal.grant("#{namespace}/**", [:read, :write, :execute])],
       source: :test
     }
 
@@ -138,6 +138,8 @@ defmodule Micelio.MCP.ServerTest do
     assert "create_issue" in names
     assert "add_issue_comment" in names
     assert "create_work_run" in names
+    assert "configure_inference_profile" in names
+    assert "get_inference_profile" in names
     assert "claim_work_node" in names
     assert "complete_work_attempt" in names
   end
@@ -391,6 +393,45 @@ defmodule Micelio.MCP.ServerTest do
   end
 
   describe "work runs" do
+    test "configures an account inference profile without accepting a credential value", %{
+      opts: opts,
+      repo: repo,
+      namespace: namespace
+    } do
+      administrator = %Principal{
+        subject: "factory-administrator",
+        account: namespace,
+        grants: [Principal.grant("#{namespace}/**", [:admin])],
+        source: :test
+      }
+
+      opts = Keyword.put(opts, :principal, administrator)
+
+      configured =
+        call_tool(
+          "configure_inference_profile",
+          %{
+            "repository" => repo,
+            "profile" => "coding",
+            "endpoint" => "https://inference.example.com/v1",
+            "model" => "coding-model",
+            "credential_source" => %{"type" => "injected_secret", "reference" => "coding-api-key"}
+          },
+          opts
+        )
+
+      refute configured[:isError], inspect(configured)
+      refute Map.has_key?(configured.structuredContent, "token")
+
+      fetched = call_tool("get_inference_profile", %{"repository" => repo, "profile" => "coding"}, opts)
+      refute fetched[:isError], inspect(fetched)
+
+      assert fetched.structuredContent["credential_source"] == %{
+               "type" => "injected_secret",
+               "reference" => "coding-api-key"
+             }
+    end
+
     test "uses a mocked Condukt operation without needing a model session", %{opts: opts, repo: repo} do
       seeded =
         call_tool(

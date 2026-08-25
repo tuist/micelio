@@ -160,7 +160,7 @@ stack::node_up() {
     MICELIO_ADMIN_PORT="${admin_port}" \
     MICELIO_ADMIN_TOKEN="${E2E_ADMIN_TOKEN}" \
     MICELIO_AUTH_BACKEND="static" \
-    MICELIO_AUTH_TOKENS="${E2E_TOKEN}=acme:read,write;${E2E_OUTSIDER_TOKEN}=outsider:read" \
+    MICELIO_AUTH_TOKENS="${E2E_TOKEN}=acme:read,write,execute;${E2E_OUTSIDER_TOKEN}=outsider:read" \
     MICELIO_POLICY_STALENESS_BUDGET_MS="500" \
     MICELIO_DEFAULT_REPLICAS="2" \
     MICELIO_CLUSTER_STRATEGY="epmd" \
