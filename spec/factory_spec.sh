@@ -93,7 +93,7 @@ Describe 'Factory work runs'
       wait \"\$first_pid\"
       wait \"\$second_pid\"
 
-      winners=\$(grep -h -o '\"attempt_id\"' \"\$first\" \"\$second\" | wc -l | tr -d ' ')
+      winners=\$(grep -h -o '\"attempt\":{' \"\$first\" \"\$second\" | wc -l | tr -d ' ')
       test \"\$winners\" -eq 1
 
       events=\$(curl -fsS -H \"Authorization: Bearer \${E2E_TOKEN}\" \\
