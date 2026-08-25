@@ -94,7 +94,7 @@ defmodule Micelio.MCP.Server do
     :telemetry.execute(
       [:micelio, :mcp, :request],
       %{duration_us: System.monotonic_time(:microsecond) - started},
-      %{method: method, outcome: elem(result, 0)}
+      %{method: metric_method(method), outcome: elem(result, 0)}
     )
 
     case {result, id} do
@@ -224,6 +224,28 @@ defmodule Micelio.MCP.Server do
   defp dispatch("logging/setLevel", _params, _opts), do: {:ok, %{}}
 
   defp dispatch(method, _params, _opts), do: {:error, @method_not_found, "method not found: #{method}"}
+
+  # The request method becomes a metrics label. Unknown methods must share one
+  # value: a client-controlled string would otherwise create an unbounded
+  # number of time series.
+  defp metric_method(method)
+       when method in [
+              "initialize",
+              "logging/setLevel",
+              "notifications/cancelled",
+              "notifications/initialized",
+              "ping",
+              "prompts/list",
+              "resources/list",
+              "resources/read",
+              "resources/templates/list",
+              "server/discover",
+              "tools/call",
+              "tools/list"
+            ],
+       do: method
+
+  defp metric_method(_method), do: "unknown"
 
   defp capabilities do
     %{
