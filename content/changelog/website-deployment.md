@@ -1,6 +1,7 @@
 +++
 title = "Faster website shipping"
 description = "The Micelio website is published from the main branch through Cloudflare Workers."
+date = "2026-08-20"
 template = "page.html"
 +++
 

@@ -1,6 +1,7 @@
 +++
 title = "Every page now carries its own social preview"
 description = "The website creates a deterministic social-preview image for every page during the build."
+date = "2026-08-24"
 template = "page.html"
 +++
 

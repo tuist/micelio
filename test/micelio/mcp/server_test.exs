@@ -17,7 +17,7 @@ defmodule Micelio.MCP.ServerTest do
     principal = %Principal{
       subject: "agent-1",
       account: namespace,
-      grants: [Principal.grant("#{namespace}/**", [:read, :write])],
+      grants: [Principal.grant("#{namespace}/**", [:read, :write, :execute])],
       source: :test
     }
 
@@ -137,6 +137,13 @@ defmodule Micelio.MCP.ServerTest do
     assert "search" in names
     assert "create_issue" in names
     assert "add_issue_comment" in names
+    assert "create_work_run" in names
+    assert "configure_secret_backend" in names
+    assert "get_secret_backend" in names
+    assert "configure_inference_profile" in names
+    assert "get_inference_profile" in names
+    assert "claim_work_node" in names
+    assert "complete_work_attempt" in names
   end
 
   describe "authorization" do
@@ -384,6 +391,149 @@ defmodule Micelio.MCP.ServerTest do
 
       assert result.isError
       assert hd(result.content).text =~ "reference not found"
+    end
+  end
+
+  describe "work runs" do
+    test "configures an account backend and inference profile without accepting a credential value", %{
+      opts: opts,
+      repo: repo,
+      namespace: namespace
+    } do
+      administrator = %Principal{
+        subject: "factory-administrator",
+        account: namespace,
+        grants: [Principal.grant("#{namespace}/**", [:admin])],
+        source: :test
+      }
+
+      opts = Keyword.put(opts, :principal, administrator)
+
+      backend =
+        call_tool(
+          "configure_secret_backend",
+          %{
+            "repository" => repo,
+            "backend" => "production",
+            "project" => "acme-production"
+          },
+          opts
+        )
+
+      refute backend[:isError], inspect(backend)
+
+      configured =
+        call_tool(
+          "configure_inference_profile",
+          %{
+            "repository" => repo,
+            "profile" => "coding",
+            "endpoint" => "https://inference.example.com/v1",
+            "model" => "coding-model",
+            "credential_binding" => %{
+              "backend" => "production",
+              "identity_id" => "coding-machine-identity",
+              "secret" => %{"reference" => "/production/coding", "field" => "api_key"}
+            }
+          },
+          opts
+        )
+
+      refute configured[:isError], inspect(configured)
+      refute Map.has_key?(configured.structuredContent, "token")
+
+      fetched = call_tool("get_inference_profile", %{"repository" => repo, "profile" => "coding"}, opts)
+      refute fetched[:isError], inspect(fetched)
+
+      assert fetched.structuredContent["credential_binding"]["backend"] == "production"
+      refute Map.has_key?(fetched.structuredContent, "token")
+
+      fetched_backend =
+        call_tool("get_secret_backend", %{"repository" => repo, "backend" => "production"}, opts)
+
+      refute fetched_backend[:isError], inspect(fetched_backend)
+      assert fetched_backend.structuredContent["driver"] == "managed_infisical"
+    end
+
+    test "uses a mocked Condukt operation without needing a model session", %{opts: opts, repo: repo} do
+      seeded =
+        call_tool(
+          "commit",
+          %{
+            "repository" => repo,
+            "branch" => "main",
+            "message" => "feat: seed factory work",
+            "changes" => [%{"path" => "README.md", "content" => "# factory fixture\n"}]
+          },
+          opts
+        )
+
+      refute seeded[:isError], inspect(seeded)
+      base_commit = seeded.structuredContent.commit
+
+      created =
+        call_tool(
+          "create_work_run",
+          %{
+            "repository" => repo,
+            "base_commit" => base_commit,
+            "graph" => %{
+              "nodes" => [
+                %{
+                  "id" => "implement",
+                  "title" => "Implement issue",
+                  "execution" => %{
+                    "type" => "condukt_operation",
+                    "operation" => "implement_issue",
+                    "input" => %{"issue" => 7}
+                  }
+                }
+              ]
+            }
+          },
+          opts
+        )
+
+      refute created[:isError], inspect(created)
+      run_id = created.structuredContent.id
+
+      claimed =
+        call_tool(
+          "claim_work_node",
+          %{"repository" => repo, "run" => run_id, "executor" => "mock-condukt-pod"},
+          opts
+        )
+
+      refute claimed[:isError], inspect(claimed)
+      assert claimed.structuredContent.work.node["execution"]["type"] == "condukt_operation"
+      assert claimed.structuredContent.work.node["execution"]["operation"] == "implement_issue"
+      attempt_id = claimed.structuredContent.attempt["id"]
+
+      completed =
+        call_tool(
+          "complete_work_attempt",
+          %{
+            "repository" => repo,
+            "run" => run_id,
+            "node" => "implement",
+            "attempt" => attempt_id,
+            "outcome" => "succeeded",
+            "artifacts" => [%{"name" => "mocked-worker-log"}]
+          },
+          opts
+        )
+
+      refute completed[:isError], inspect(completed)
+      assert completed.structuredContent.status == "succeeded"
+
+      events = call_tool("work_run_events", %{"repository" => repo, "run" => run_id}, opts)
+      refute events[:isError], inspect(events)
+
+      assert Enum.map(events.structuredContent.events, & &1["type"]) == [
+               "work_run_created",
+               "node_claimed",
+               "attempt_succeeded"
+             ]
     end
   end
 

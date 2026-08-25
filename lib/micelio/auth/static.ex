@@ -90,7 +90,9 @@ defmodule Micelio.Auth.Static do
        %{
          account: String.trim(account),
          scopes:
-           permissions |> String.split(",", trim: true) |> Enum.map(&String.to_existing_atom(String.trim(&1)))
+           permissions
+           |> String.split(",", trim: true)
+           |> Enum.map(&(String.trim(&1) |> Principal.permission!()))
        }}
     end)
   end

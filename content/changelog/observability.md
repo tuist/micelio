@@ -1,6 +1,7 @@
 +++
 title = "A clearer view of a running node"
 description = "Micelio now connects traces, metrics, and logs across its request, replication, and object-store work."
+date = "2026-08-25"
 template = "page.html"
 +++
 

@@ -79,6 +79,25 @@ defmodule Micelio.HTTP.AuthPlug do
     end
   end
 
+  @doc "Ensure the request may administer account-scoped configuration."
+  @spec authorize_account(Plug.Conn.t(), String.t(), Micelio.Auth.Principal.permission()) ::
+          {:ok, Plug.Conn.t()} | {:halt, Plug.Conn.t()}
+  def authorize_account(conn, account, permission) do
+    case conn.assigns[:principal] do
+      nil ->
+        {:halt, challenge(conn)}
+
+      principal ->
+        case Auth.authorize_account(principal, account, permission) do
+          :ok ->
+            {:ok, conn}
+
+          {:error, :forbidden} ->
+            {:halt, deny(conn, 403, "micelio: not permitted to administer account #{account}")}
+        end
+    end
+  end
+
   @doc """
   Reject the request with an authentication challenge.
 

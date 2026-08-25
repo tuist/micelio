@@ -74,6 +74,7 @@ defmodule Micelio.AuthTest do
 
       assert Principal.allows?(principal, "acme/app", :read)
       assert Principal.allows?(principal, "acme/app", :write)
+      assert Principal.allows?(principal, "acme/app", :execute)
       assert Principal.allows?(principal, "acme/app", :admin)
     end
 
@@ -137,11 +138,15 @@ defmodule Micelio.AuthTest do
     end
 
     test "parse_tokens/1 reads the environment format" do
-      parsed = Static.parse_tokens("t1=acme:read,write;t2=beta:read")
+      parsed = Static.parse_tokens("t1=acme:read,write,execute;t2=beta:read")
 
       assert parsed["t1"].account == "acme"
-      assert parsed["t1"].scopes == [:read, :write]
+      assert parsed["t1"].scopes == [:read, :write, :execute]
       assert parsed["t2"].scopes == [:read]
+    end
+
+    test "parse_tokens/1 accepts the execution scope without dynamically creating an atom" do
+      assert %{"worker" => %{scopes: [:execute]}} = Static.parse_tokens("worker=acme:execute")
     end
   end
 end

@@ -247,8 +247,8 @@ defmodule Micelio.Auth.OIDC do
   defp parse_permissions(permissions) when is_list(permissions) do
     permissions
     |> Enum.map(&to_string/1)
-    |> Enum.filter(&(&1 in ~w(read write admin)))
-    |> Enum.map(&String.to_existing_atom/1)
+    |> Enum.filter(&(&1 in ~w(read write execute admin)))
+    |> Enum.map(&Principal.permission/1)
   end
 
   defp from_namespace(subject, config) do

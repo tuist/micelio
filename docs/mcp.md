@@ -141,6 +141,25 @@ Issues use the source repository's private Git history and the normal durable
 write path. See [issues.md](issues.md) for storage, concurrency, HTTP, and
 authorization details.
 
+### Factory work runs
+
+| Tool | |
+|---|---|
+| `create_work_run`, `list_work_runs`, `get_work_run` | Create and inspect a durable graph of work |
+| `work_run_events` | Immutable, revision-cursored work-run events |
+| `claim_work_node`, `complete_work_attempt` | Pull one ready node and conditionally accept its evidence |
+| `approve_work_node`, `cancel_work_run`, `expire_work_node` | Control an approval, terminal state, or stale lease |
+| `get_work_attempt` | Claim and result evidence for one attempt |
+| `configure_secret_backend`, `list_secret_backends`, `get_secret_backend` | Manage non-secret account bindings to the deployment-managed Infisical service |
+| `configure_inference_profile`, `list_inference_profiles`, `get_inference_profile` | Manage inference profiles that reference an account secret backend |
+
+An agent node can name a [Condukt](https://github.com/tuist/condukt) operation
+and typed input. It can also select a versioned account inference profile.
+Micelio returns the profile name, version, endpoint, and model to a caller with
+repository execution permission, but not a secret backend or credential
+binding. See [factory.md](factory.md) for profile, graph, storage, and lease
+semantics.
+
 ## Errors
 
 An ordinary failure — a branch moved, a file is missing — comes back as a tool

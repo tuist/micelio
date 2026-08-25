@@ -12,7 +12,8 @@ config :micelio,
   roles: [:serve],
   data_dir: {:system_tmp, "micelio-test-repositories"},
   object_store: {Micelio.ObjectStore.Filesystem, root: {:system_tmp, "micelio-test-object-store"}},
-  auth: {Micelio.Auth.Static, tokens: %{"test-token" => %{account: "test", scopes: [:read, :write]}}},
+  auth:
+    {Micelio.Auth.Static, tokens: %{"test-token" => %{account: "test", scopes: [:read, :write, :execute]}}},
   node_id: "test-1",
   peers: []
 
