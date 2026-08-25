@@ -20,6 +20,7 @@ defmodule Micelio.HTTP.Router do
   alias Micelio.HTTP.GitRouter
   alias Micelio.HTTP.IssuesRouter
   alias Micelio.HTTP.MCPRouter
+  alias Micelio.HTTP.WorkRunsRouter
   alias Micelio.HTTP.WellKnownRouter
 
   @impl true
@@ -61,6 +62,13 @@ defmodule Micelio.HTTP.Router do
     |> assign(:api, true)
     |> AuthPlug.call([])
     |> then(&IssuesRouter.call(%{&1 | path_info: rest}, IssuesRouter.init([])))
+  end
+
+  defp route(%{path_info: ["api", "work-runs" | rest]} = conn) do
+    conn
+    |> assign(:api, true)
+    |> AuthPlug.call([])
+    |> then(&WorkRunsRouter.call(%{&1 | path_info: rest}, WorkRunsRouter.init([])))
   end
 
   defp route(%{path_info: []} = conn) do

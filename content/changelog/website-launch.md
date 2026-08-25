@@ -1,6 +1,7 @@
 +++
 title = "A home for Micelio"
 description = "Micelio gained a focused public website for getting started, agents, hosting, operations, and change notes."
+date = "2026-08-20"
 template = "page.html"
 +++
 

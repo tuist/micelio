@@ -1,6 +1,7 @@
 +++
 title = "Maintenance work stays off the serving path"
 description = "Micelio separates Git serving from compaction and lookup rebuilding without requiring a cluster leader."
+date = "2026-08-24"
 template = "page.html"
 +++
 

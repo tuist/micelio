@@ -1,6 +1,7 @@
 +++
 title = "More ways to deploy"
 description = "Micelio added one-click deployment routes for several cloud platforms."
+date = "2026-08-20"
 template = "page.html"
 +++
 

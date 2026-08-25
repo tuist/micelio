@@ -239,6 +239,8 @@ replicas are doing real catch-up work on the read path, and latency will follow.
 | `micelio_object_store_request_count{operation,outcome}` | Is object-store traffic or a particular failure outcome rising? |
 | `micelio_http_request_duration_seconds{listener,method,status}` | Is any public, hook, or administration listener slow or returning errors? `method` and `status` use bounded classes; `status` is a response class such as `5xx` |
 | `micelio_http_exception_count{listener}` | Did a request terminate unexpectedly before it could return a response? |
+| `micelio_factory_operation_duration_seconds{operation,outcome}` | Is durable graph-run coordination slow or failing? Operation and outcome are bounded, so repository work does not create metric-label cardinality. |
+| `micelio_factory_operation_count{operation,outcome}` | Which durable graph-run operations are succeeding or failing? |
 
 ### What to autoscale on
 

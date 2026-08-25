@@ -137,6 +137,9 @@ defmodule Micelio.MCP.ServerTest do
     assert "search" in names
     assert "create_issue" in names
     assert "add_issue_comment" in names
+    assert "create_work_run" in names
+    assert "claim_work_node" in names
+    assert "complete_work_attempt" in names
   end
 
   describe "authorization" do
@@ -384,6 +387,89 @@ defmodule Micelio.MCP.ServerTest do
 
       assert result.isError
       assert hd(result.content).text =~ "reference not found"
+    end
+  end
+
+  describe "work runs" do
+    test "uses a mocked Condukt operation without needing a model session", %{opts: opts, repo: repo} do
+      seeded =
+        call_tool(
+          "commit",
+          %{
+            "repository" => repo,
+            "branch" => "main",
+            "message" => "feat: seed factory work",
+            "changes" => [%{"path" => "README.md", "content" => "# factory fixture\n"}]
+          },
+          opts
+        )
+
+      refute seeded[:isError], inspect(seeded)
+      base_commit = seeded.structuredContent.commit
+
+      created =
+        call_tool(
+          "create_work_run",
+          %{
+            "repository" => repo,
+            "base_commit" => base_commit,
+            "graph" => %{
+              "nodes" => [
+                %{
+                  "id" => "implement",
+                  "title" => "Implement issue",
+                  "execution" => %{
+                    "type" => "condukt_operation",
+                    "operation" => "implement_issue",
+                    "input" => %{"issue" => 7}
+                  }
+                }
+              ]
+            }
+          },
+          opts
+        )
+
+      refute created[:isError], inspect(created)
+      run_id = created.structuredContent.id
+
+      claimed =
+        call_tool(
+          "claim_work_node",
+          %{"repository" => repo, "run" => run_id, "executor" => "mock-condukt-pod"},
+          opts
+        )
+
+      refute claimed[:isError], inspect(claimed)
+      assert claimed.structuredContent.work.node["execution"]["type"] == "condukt_operation"
+      assert claimed.structuredContent.work.node["execution"]["operation"] == "implement_issue"
+      attempt_id = claimed.structuredContent.attempt["id"]
+
+      completed =
+        call_tool(
+          "complete_work_attempt",
+          %{
+            "repository" => repo,
+            "run" => run_id,
+            "node" => "implement",
+            "attempt" => attempt_id,
+            "outcome" => "succeeded",
+            "artifacts" => [%{"name" => "mocked-worker-log"}]
+          },
+          opts
+        )
+
+      refute completed[:isError], inspect(completed)
+      assert completed.structuredContent.status == "succeeded"
+
+      events = call_tool("work_run_events", %{"repository" => repo, "run" => run_id}, opts)
+      refute events[:isError], inspect(events)
+
+      assert Enum.map(events.structuredContent.events, & &1["type"]) == [
+               "work_run_created",
+               "node_claimed",
+               "attempt_succeeded"
+             ]
     end
   end
 

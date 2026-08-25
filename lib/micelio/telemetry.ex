@@ -36,6 +36,8 @@ defmodule Micelio.Telemetry do
     * `[:micelio, :git, :served]` — `duration_ms`, `bytes`, meta `service`
     * `[:micelio, :git, :aborted]` — client vanished or stream failed
     * `[:micelio, :mcp, :request]` — `duration_us`, meta `method`, `outcome`
+    * `[:micelio, :factory, :operation]` — `duration_us`, meta `operation`,
+      `outcome`; durable graph-run coordination
     * `[:micelio, :auth, :authorized]` / `[:micelio, :auth, :denied]`
     * `[:micelio, :cluster, :nodeup]` / `[:micelio, :cluster, :nodedown]`
     * `[:micelio, :repository, :created]`
@@ -58,7 +60,8 @@ defmodule Micelio.Telemetry do
     logging_events = [
       [:micelio, :push, :rejected],
       [:micelio, :git, :aborted],
-      [:micelio, :wal, :compact]
+      [:micelio, :wal, :compact],
+      [:micelio, :factory, :operation]
     ]
 
     :telemetry.detach("micelio-logging")
@@ -98,6 +101,15 @@ defmodule Micelio.Telemetry do
       packs: measurements.packs
     )
   end
+
+  def handle_event([:micelio, :factory, :operation], measurements, %{outcome: :error} = meta, _config) do
+    Logger.warning("factory operation failed",
+      operation: meta.operation,
+      duration_us: measurements.duration_us
+    )
+  end
+
+  def handle_event([:micelio, :factory, :operation], _measurements, _meta, _config), do: :ok
 
   def handle_event(_event, _measurements, _meta, _config), do: :ok
 
