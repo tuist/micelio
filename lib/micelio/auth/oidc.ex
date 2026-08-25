@@ -82,7 +82,6 @@ defmodule Micelio.Auth.OIDC do
     case JOSE.JWT.verify_strict(jwk, [alg], token) do
       {true, jwt, _jws} -> {:ok, JOSE.JWT.to_map(jwt) |> elem(1)}
       {false, _jwt, _jws} -> {:error, :invalid_signature}
-      _ -> {:error, :invalid_credential}
     end
   rescue
     _ -> {:error, :invalid_credential}

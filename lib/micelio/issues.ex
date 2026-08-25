@@ -522,7 +522,6 @@ defmodule Micelio.Issues do
            end
          end) do
       {:ok, result} -> result
-      {:error, reason} -> {:error, "could not reach a replica: #{inspect(reason)}"}
     end
   end
 

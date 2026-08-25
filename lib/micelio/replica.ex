@@ -419,7 +419,7 @@ defmodule Micelio.Replica do
   repository in one place rather than `n`, without a router, a session
   affinity rule, or a lookup service to keep correct.
   """
-  @spec via_owner(String.t(), (-> result), keyword()) :: {:ok, result} | {:error, term()}
+  @spec via_owner(String.t(), (-> result), keyword()) :: {:ok, result}
         when result: term()
   def via_owner(repo_id, fun, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, :timer.seconds(30))
