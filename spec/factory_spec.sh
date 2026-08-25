@@ -17,7 +17,7 @@ Describe 'Factory work runs'
         -H 'Authorization: Bearer \${E2E_TOKEN}' \\
         -H 'Content-Type: application/json' \\
         --data \"\$(printf '{\\\"base_commit\\\":\\\"%s\\\",\\\"graph\\\":{\\\"nodes\\\":[{\\\"id\\\":\\\"implement\\\",\\\"kind\\\":\\\"agent\\\",\\\"title\\\":\\\"Implement fixture\\\",\\\"execution\\\":{\\\"type\\\":\\\"condukt_operation\\\",\\\"operation\\\":\\\"mock_implement\\\",\\\"input\\\":{\\\"path\\\":\\\"IMPLEMENTED.md\\\"}}}]}}' '$base_commit')\" \\
-        '\${NODE1_URL}/api/work-runs?repository=$repo')
+        "\${NODE1_URL}/api/work-runs?repository=$repo")
       run_id=\$(printf '%s' \"\$created\" | sed -n 's/.*\"run_id\":\"\([^\"]*\)\".*/\1/p')
       test -n \"\$run_id\"
 
@@ -72,7 +72,7 @@ Describe 'Factory work runs'
         -H 'Authorization: Bearer \${E2E_TOKEN}' \\
         -H 'Content-Type: application/json' \\
         --data \"\$(printf '{\\\"base_commit\\\":\\\"%s\\\",\\\"graph\\\":{\\\"nodes\\\":[{\\\"id\\\":\\\"implement\\\",\\\"title\\\":\\\"Implement fixture\\\"}]}}' '$base_commit')\" \\
-        '\${NODE1_URL}/api/work-runs?repository=$repo')
+        "\${NODE1_URL}/api/work-runs?repository=$repo")
       run_id=\$(printf '%s' \"\$created\" | sed -n 's/.*\"run_id\":\"\([^\"]*\)\".*/\1/p')
       test -n \"\$run_id\"
 
