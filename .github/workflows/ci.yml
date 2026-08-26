@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "erlang elixir"
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "erlang elixir"
@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "erlang elixir"
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "erlang elixir shellspec"
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "erlang elixir protoc"
