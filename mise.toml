@@ -8,7 +8,7 @@ erlang = "29.0.5"
 elixir = "1.20.3"
 # The write-ahead log is a persisted wire format, so its schema is compiled
 # from .proto rather than hand-written. See priv/proto and `mise run proto`.
-protoc = "35.1"
+protoc = "36.0"
 # End-to-end tests drive a real server with a real git client over the real
 # smart-HTTP protocol, which is a shell problem, not an ExUnit one.
 shellspec = "0.28.1"
