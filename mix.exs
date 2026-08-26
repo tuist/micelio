@@ -33,7 +33,7 @@ defmodule Micelio.MixProject do
     [
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.7"},
 
       # The public forge API is specified from the same schema it publishes.
       {:open_api_spex, "~> 3.22"},
