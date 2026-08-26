@@ -4,6 +4,6 @@
     "config:recommended"
   ],
   "constraints": {
-    "erlang": "29.0.5"
+    "erlang": "^29"
   }
 }
