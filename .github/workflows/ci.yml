@@ -187,7 +187,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint charts/micelio --set objectStore.endpoint=http://minio:9000 --set auth.oidc.audience=micelio
       - name: Render with autoscaling and ingress enabled
         run: |
@@ -208,7 +208,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       # Three workers, not one. A single-node cluster cannot show pods
       # spreading, placement agreeing across machines, or a repository being
       # served by a node that never held it — which is most of what this
