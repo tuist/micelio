@@ -42,7 +42,7 @@ defmodule Micelio.MixProject do
       # child's lifetime to the owning BEAM process, so a crashed or killed
       # replica can never leave an orphaned upload-pack holding a repository
       # open, and long-running pushes can be given hard resource ceilings.
-      {:muontrap, "~> 1.5"},
+      {:muontrap, "~> 2.0"},
 
       # The write-ahead log is a persisted, cross-version wire format.
       {:protobuf, "~> 0.13"},
