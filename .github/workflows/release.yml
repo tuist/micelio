@@ -93,7 +93,7 @@ jobs:
         env:
           digest: ${{ steps.build.outputs.digest }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digest-${{ strategy.job-index }}
           path: /tmp/digests/*
@@ -118,7 +118,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: digest-*
           merge-multiple: true
@@ -168,7 +168,7 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Package and push
         run: mise run release:chart --version "${{ needs.detect.outputs.next-version }}" --push --dist dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: chart
           path: dist/*
@@ -192,7 +192,7 @@ jobs:
       # By name, not everything: build-push-action also uploads a build-record
       # artifact, and pulling the whole set in makes this job fail for reasons
       # that have nothing to do with the release.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: chart
           path: dist
