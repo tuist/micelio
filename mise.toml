@@ -13,7 +13,7 @@ protoc = "36.0"
 # smart-HTTP protocol, which is a shell problem, not an ExUnit one.
 shellspec = "0.28.1"
 # Releases are cut from conventional commits; see mise/tasks/release.
-git-cliff = "2.13.1"
+git-cliff = "2.14.1"
 helm = "4.2.4"
 # The project website is a static Zola site deployed to Cloudflare Workers.
 zola = "0.23.4"
